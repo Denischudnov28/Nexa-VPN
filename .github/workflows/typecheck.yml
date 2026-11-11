@@ -1,4 +1,4 @@
-name: Typecheck and Android prebuild validation
+name: Typecheck and Android native build validation
 
 on:
   push:
@@ -14,6 +14,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
       - run: npm install
       - name: TypeScript validation
         run: npm run typecheck
@@ -26,3 +31,8 @@ jobs:
           grep -R -q 'NexaVpnPackage()' android/app/src/main/java
           grep -q 'com.wireguard.android:tunnel:' android/app/build.gradle
           grep -q 'coreLibraryDesugaringEnabled true' android/app/build.gradle
+      - name: Compile Android debug APK
+        run: |
+          chmod +x android/gradlew
+          cd android
+          ./gradlew --no-daemon :app:assembleDebug
