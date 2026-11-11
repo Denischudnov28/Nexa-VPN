@@ -1,17 +1,27 @@
 # iOS Packet Tunnel integration
 
-The Packet Tunnel provider source is in `NexaPacketTunnelProvider.swift`.
-The wg-quick parser extension is based on WireGuard Apple upstream source and retains its MIT notice.
+The iOS implementation consists of:
+- `NexaVpnModule.swift` and `NexaVpnModuleBridge.m`: React Native bridge.
+- `NexaPacketTunnelProvider.swift`: Network Extension packet-tunnel provider.
+- `TunnelConfiguration+WgQuickConfig.swift`: wg-quick parser support.
 
 ## Required Xcode work
 
 1. Generate the native iOS project with Expo prebuild/EAS.
 2. Add a Network Extension target with bundle identifier `app.nexa.vpn.network-extension`.
-3. Set the extension point to `com.apple.networkextension.packet-tunnel` and its principal class to `$(PRODUCT_MODULE_NAME).NexaPacketTunnelProvider`.
-4. Add the WireGuard Apple Swift package: `https://git.zx2c4.com/wireguard-apple`.
-5. Follow upstream WireGuardKit instructions to add the external `WireGuardGoBridgeiOS` build target and link `WireGuardKit` to both the app and extension. The package alone does not build the Go bridge.
-6. Enable the Network Extensions capability / Packet Tunnel entitlement for the app's developer team and provision both targets.
-7. Store the WireGuard profile in Keychain-backed storage in the containing app. This sample reads a wg-quick profile from the provider protocol's `WgQuickConfig` dictionary only to keep the extension sample self-contained; do not ship private keys in an ordinary plist or logs.
-8. Test on physical iPhones with real server configuration and verify DNS, IPv4, IPv6, reconnect and leak behavior.
+3. Set the extension point to `com.apple.networkextension.packet-tunnel` and principal class to `$(PRODUCT_MODULE_NAME).NexaPacketTunnelProvider`.
+4. Add `NexaVpnModule.swift` and `NexaVpnModuleBridge.m` to the containing app target; add `NexaPacketTunnelProvider.swift` and the required WireGuard parser sources to the extension target.
+5. Add the WireGuard Apple Swift package: `https://git.zx2c4.com/wireguard-apple`.
+6. Follow upstream WireGuard Apple instructions to add the external `WireGuardGoBridgeiOS` build target and link `WireGuardKit` to the extension. Adding the Swift package alone does not build the Go bridge.
+7. Enable the Network Extensions capability / Packet Tunnel entitlement for the app and extension, configure signing and provisioning for both targets, and verify the provider bundle identifier matches the bridge.
+8. Build and test on a physical iPhone with a real server configuration. Verify DNS, IPv4, IPv6, reconnect, sleep/wake, and leak behavior.
 
-This source is not yet wired to a React Native module or Xcode target. A successful JavaScript build does not prove the iOS extension builds or that a VPN tunnel is active.
+## Critical security requirement
+
+The current bridge passes the complete wg-quick profile through `NETunnelProviderProtocol.providerConfiguration`. This is a development-only handoff and may persist private key material in VPN preferences. **Do not ship this implementation as production-ready.** Before production, replace this handoff with a reviewed, access-controlled Keychain/shared App Group design; minimize secret lifetime, never log configuration/private keys, and verify the actual storage and backup behavior.
+
+## Current status
+
+The bridge/provider sources are present but are not yet wired into generated Xcode app and extension targets. No iOS build, signing validation, or physical-device test has been completed. No production server profile is included.
+
+A successful JavaScript build does not prove the iOS extension builds or that a VPN tunnel is active.
