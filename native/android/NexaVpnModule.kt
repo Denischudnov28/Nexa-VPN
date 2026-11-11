@@ -26,7 +26,7 @@ class NexaVpnModule(private val context: ReactApplicationContext) :
     fun prepare(promise: Promise) {
         val intent = controller.authorizationIntent()
         if (intent == null) { promise.resolve(true); return }
-        val activity = currentActivity
+        val activity = reactApplicationContext.currentActivity
         if (activity == null) { promise.reject("E_NO_ACTIVITY", "Open the app before requesting VPN permission."); return }
         if (permissionPromise != null) { promise.reject("E_PERMISSION_PENDING", "VPN permission request is already pending."); return }
         permissionPromise = promise
