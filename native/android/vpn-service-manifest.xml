@@ -1,0 +1,10 @@
+<!-- Merge this service declaration into android/app/src/main/AndroidManifest.xml.
+     The service is provided by the official WireGuard tunnel AAR. -->
+<service
+    android:name="com.wireguard.android.backend.GoBackend$VpnService"
+    android:permission="android.permission.BIND_VPN_SERVICE"
+    android:exported="true">
+    <intent-filter>
+        <action android:name="android.net.VpnService" />
+    </intent-filter>
+</service>
