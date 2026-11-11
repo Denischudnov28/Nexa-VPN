@@ -6,8 +6,8 @@ export type NativeVpnState =
 
 type NativeVpnModule = {
   prepare(): Promise<boolean>;
-  connect(config: string): Promise<string>;
-  disconnect(): Promise<string>;
+  connect(config: string): Promise<NativeVpnState>;
+  disconnect(): Promise<NativeVpnState>;
   getStatus(): Promise<NativeVpnState>;
 };
 
