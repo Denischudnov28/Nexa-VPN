@@ -45,7 +45,7 @@ class NexaVpnModule(private val context: ReactApplicationContext) :
         }
         executor.execute {
             try {
-                val state = controller.connect(config).lowercase()
+                val state = normalizeState(controller.connect(config))
                 emitStatus(state)
                 promise.resolve(state)
             } catch (error: Exception) {
@@ -59,7 +59,7 @@ class NexaVpnModule(private val context: ReactApplicationContext) :
     fun disconnect(promise: Promise) {
         executor.execute {
             try {
-                val state = controller.disconnect().lowercase()
+                val state = normalizeState(controller.disconnect())
                 emitStatus(state)
                 promise.resolve(state)
             } catch (error: Exception) { promise.reject("E_DISCONNECT", "Could not stop WireGuard tunnel.", error) }
@@ -69,9 +69,15 @@ class NexaVpnModule(private val context: ReactApplicationContext) :
     @ReactMethod
     fun getStatus(promise: Promise) {
         executor.execute {
-            try { promise.resolve(controller.status().lowercase()) }
+            try { promise.resolve(normalizeState(controller.status())) }
             catch (error: Exception) { promise.reject("E_STATUS", "Could not read tunnel state.", error) }
         }
+    }
+
+    private fun normalizeState(value: String): String = when (value.uppercase()) {
+        "UP" -> "connected"
+        "DOWN" -> "disconnected"
+        else -> value.lowercase()
     }
 
     private fun emitStatus(value: String) {
