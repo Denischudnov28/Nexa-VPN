@@ -24,6 +24,6 @@ jobs:
         run: |
           test -f android/app/src/main/java/app/nexa/vpn/NexaVpnModule.kt
           test -f android/app/src/main/java/app/nexa/vpn/NexaWireGuardController.kt
-          grep -q 'NexaVpnPackage()' android/app/src/main/java/*/MainApplication.kt
+          grep -R -q 'NexaVpnPackage()' android/app/src/main/java
           grep -q 'com.wireguard.android:tunnel:' android/app/build.gradle
           grep -q 'coreLibraryDesugaringEnabled true' android/app/build.gradle
