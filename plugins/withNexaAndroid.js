@@ -1,4 +1,9 @@
-const { withAppBuildGradle, withDangerousMod, createRunOncePlugin } = require("expo/config-plugins");
+const {
+  withAppBuildGradle,
+  withDangerousMod,
+  withMainApplication,
+  createRunOncePlugin,
+} = require("expo/config-plugins");
 const fs = require("fs");
 const path = require("path");
 
@@ -9,14 +14,20 @@ function withNexaAndroid(config) {
     let gradle = mod.modResults.contents;
     const dependency = `implementation "com.wireguard.android:tunnel:${WIREGUARD_VERSION}"`;
     if (!gradle.includes("com.wireguard.android:tunnel:")) {
-      const marker = /dependencies\s*\{/;
-      if (!marker.test(gradle)) throw new Error("NEXA VPN: could not find app Gradle dependencies block.");
-      gradle = gradle.replace(marker, (match) => `${match}\n    ${dependency}`);
+      const dependencies = /dependencies\s*\{/;
+      if (!dependencies.test(gradle)) throw new Error("NEXA VPN: app Gradle dependencies block not found.");
+      gradle = gradle.replace(dependencies, (match) => `${match}\n    ${dependency}`);
     }
+
     if (!gradle.includes("coreLibraryDesugaringEnabled")) {
-      const marker = /compileOptions\s*\{/;
-      if (marker.test(gradle)) {
-        gradle = gradle.replace(marker, (match) => `${match}\n        coreLibraryDesugaringEnabled true`);
+      const compileOptions = /compileOptions\s*\{/;
+      if (compileOptions.test(gradle)) {
+        gradle = gradle.replace(compileOptions, (match) => `${match}\n        coreLibraryDesugaringEnabled true`);
+      } else {
+        const android = /android\s*\{/;
+        if (!android.test(gradle)) throw new Error("NEXA VPN: Android Gradle block not found.");
+        gradle = gradle.replace(android, (match) =>
+          `${match}\n    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_17\n        targetCompatibility JavaVersion.VERSION_17\n        coreLibraryDesugaringEnabled true\n    }`);
       }
     }
     if (!gradle.includes("desugar_jdk_libs:")) {
@@ -24,6 +35,22 @@ function withNexaAndroid(config) {
         `${match}\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.5"`);
     }
     mod.modResults.contents = gradle;
+    return mod;
+  });
+
+  config = withMainApplication(config, (mod) => {
+    let source = mod.modResults.contents;
+    if (!source.includes("NexaVpnPackage()")) {
+      const packageList = /(PackageList\(this\)\.packages\.apply\s*\{)/;
+      if (!packageList.test(source)) {
+        throw new Error("NEXA VPN: unsupported MainApplication.kt structure; register NexaVpnPackage manually.");
+      }
+      source = source.replace(packageList, "$1\n              add(NexaVpnPackage())");
+      if (!source.includes("import app.nexa.vpn.NexaVpnPackage")) {
+        source = source.replace(/^(package [^\n]+\n)/m, "$1\nimport app.nexa.vpn.NexaVpnPackage\n");
+      }
+    }
+    mod.modResults.contents = source;
     return mod;
   });
 
@@ -43,4 +70,4 @@ function withNexaAndroid(config) {
   return config;
 }
 
-module.exports = createRunOncePlugin(withNexaAndroid, "with-nexa-android", "0.1.1");
+module.exports = createRunOncePlugin(withNexaAndroid, "with-nexa-android", "0.2.0");
