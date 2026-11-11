@@ -5,6 +5,7 @@ import React
 
 @objc(NexaVpnModule)
 final class NexaVpnModule: RCTEventEmitter {
+    private let providerBundleIdentifier = "app.nexa.vpn.network-extension"
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
 
@@ -14,7 +15,12 @@ final class NexaVpnModule: RCTEventEmitter {
     override func startObserving() {
         observer = NotificationCenter.default.addObserver(
             forName: .NEVPNStatusDidChange, object: nil, queue: .main
-        ) { [weak self] _ in self?.emitStatus() }
+        ) { [weak self] notification in
+            guard let self,
+                  let connection = notification.object as? NEVPNConnection,
+                  connection === self.manager?.connection else { return }
+            self.emitStatus()
+        }
         emitStatus()
     }
 
@@ -43,8 +49,10 @@ final class NexaVpnModule: RCTEventEmitter {
                 reject("E_MANAGER", "VPN manager unavailable.", nil); return
             }
             let tunnel = NETunnelProviderProtocol()
-            tunnel.providerBundleIdentifier = "app.nexa.vpn.network-extension"
+            tunnel.providerBundleIdentifier = self.providerBundleIdentifier
             tunnel.serverAddress = "NEXA VPN"
+            // DEVELOPMENT ONLY: providerConfiguration may persist private key material.
+            // Replace with reviewed Keychain/App Group provisioning before production.
             tunnel.providerConfiguration = ["WgQuickConfig": config]
             manager.protocolConfiguration = tunnel
             manager.localizedDescription = "NEXA VPN"
@@ -83,9 +91,12 @@ final class NexaVpnModule: RCTEventEmitter {
     }
 
     private func loadManager(_ completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
-        NETunnelProviderManager.loadAllFromPreferences { managers, error in
+        NETunnelProviderManager.loadAllFromPreferences { [providerBundleIdentifier] managers, error in
             if let error { completion(nil, error); return }
-            completion(managers?.first ?? NETunnelProviderManager(), nil)
+            let matching = managers?.first {
+                ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerBundleIdentifier
+            }
+            completion(matching ?? NETunnelProviderManager(), nil)
         }
     }
 
