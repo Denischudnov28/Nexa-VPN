@@ -1,7 +1,5 @@
 import type { WireGuardProfile } from "./types";
 
-// A WireGuard key is exactly 32 bytes encoded as canonical Base64 (44 chars)
-// or the equivalent unpadded representation (43 chars).
 const KEY_PATTERN = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=?$/;
 
 function isKey(value: unknown): value is string {
@@ -13,15 +11,14 @@ function isKey(value: unknown): value is string {
 function isIPv4(value: string): boolean {
   const parts = value.split(".");
   return parts.length === 4 && parts.every((part) => {
-    if (!/^(0|[1-9]\\d{0,2})$/.test(part)) return false;
+    if (!/^(0|[1-9]\d{0,2})$/.test(part)) return false;
     const octet = Number(part);
-    return octet >= 0 && octet <= 255;
+    return octet <= 255;
   });
 }
 
 function isIPv6(value: string): boolean {
   if (!value.includes(":") || value.includes("%")) return false;
-  // Embedded IPv4 is permitted only as the final 32 bits.
   let address = value;
   if (address.includes(".")) {
     const lastColon = address.lastIndexOf(":");
@@ -46,31 +43,30 @@ function isIp(value: string): boolean {
 }
 
 function isCidr(value: string): boolean {
-  const match = value.match(/^(.+)\\/(\\d{1,3})$/);
+  const match = value.match(/^(.+)\/(\d{1,3})$/);
   if (!match) return false;
   const [, ip, prefixText] = match;
-  const maxPrefix = ip.includes(":") ? 128 : 32;
   const prefix = Number(prefixText);
-  return prefix >= 0 && prefix <= maxPrefix && isIp(ip);
+  const maxPrefix = ip.includes(":") ? 128 : 32;
+  return prefix <= maxPrefix && isIp(ip);
 }
 
 function isHostname(value: string): boolean {
-  if (value.length > 253 || value.length === 0) return false;
+  if (!value || value.length > 253) return false;
   const hostname = value.endsWith(".") ? value.slice(0, -1) : value;
   return hostname.split(".").every((label) =>
-    label.length >= 1 &&
-    label.length <= 63 &&
+    label.length >= 1 && label.length <= 63 &&
     /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)
   );
 }
 
 function isEndpoint(value: string): boolean {
-  const match = value.match(/^(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9.-]+):(\\d{1,5})$/);
+  const match = value.match(/^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+):(\d{1,5})$/);
   if (!match) return false;
   const host = match[1].startsWith("[") ? match[1].slice(1, -1) : match[1];
   const port = Number(match[2]);
-  const validHost = match[1].startsWith("[") ? isIPv6(host) : isHostname(host);
-  return validHost && port >= 1 && port <= 65535;
+  return (match[1].startsWith("[") ? isIPv6(host) : isHostname(host)) &&
+    port >= 1 && port <= 65535;
 }
 
 export function validateWireGuardProfile(input: unknown): input is WireGuardProfile {
@@ -79,14 +75,13 @@ export function validateWireGuardProfile(input: unknown): input is WireGuardProf
   if (typeof profile.id !== "string" || !profile.id.trim() ||
       typeof profile.name !== "string" || !profile.name.trim() ||
       !profile.interface || !Array.isArray(profile.peers)) return false;
-
   const iface = profile.interface;
-  if (!isKey(iface.privateKey) || !Array.isArray(iface.addresses) || iface.addresses.length === 0) return false;
-  if (!iface.addresses.every((address) => typeof address === "string" && isCidr(address))) return false;
+  if (!isKey(iface.privateKey) || !Array.isArray(iface.addresses) ||
+      iface.addresses.length === 0 ||
+      !iface.addresses.every((address) => typeof address === "string" && isCidr(address))) return false;
   if (iface.dns !== undefined &&
       (!Array.isArray(iface.dns) || !iface.dns.every((item) => typeof item === "string" && isIp(item)))) return false;
   if (profile.peers.length === 0) return false;
-
   return profile.peers.every((peer) =>
     isKey(peer.publicKey) &&
     typeof peer.endpoint === "string" && isEndpoint(peer.endpoint) &&
@@ -112,5 +107,5 @@ export function serializeWireGuardProfile(profile: WireGuardProfile): string {
     lines.push(`Endpoint = ${peer.endpoint}`, `AllowedIPs = ${peer.allowedIPs.join(", ")}`);
     if (peer.persistentKeepalive !== undefined) lines.push(`PersistentKeepalive = ${peer.persistentKeepalive}`);
   }
-  return lines.join("\\n");
+  return lines.join("\n");
 }
