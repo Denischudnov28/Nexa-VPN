@@ -1,4 +1,4 @@
-name: Typecheck
+name: Typecheck and Android prebuild validation
 
 on:
   push:
@@ -7,12 +7,23 @@ on:
     branches: [main]
 
 jobs:
-  typecheck:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
       - run: npm install
-      - run: npm run typecheck
+      - name: TypeScript validation
+        run: npm run typecheck
+      - name: Generate Android native project
+        run: npx expo prebuild --platform android --no-install --clean
+      - name: Verify NEXA native module integration
+        run: |
+          test -f android/app/src/main/java/app/nexa/vpn/NexaVpnModule.kt
+          test -f android/app/src/main/java/app/nexa/vpn/NexaWireGuardController.kt
+          grep -q 'NexaVpnPackage()' android/app/src/main/java/*/MainApplication.kt
+          grep -q 'com.wireguard.android:tunnel:' android/app/build.gradle
+          grep -q 'coreLibraryDesugaringEnabled true' android/app/build.gradle
