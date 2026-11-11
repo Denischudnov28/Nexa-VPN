@@ -20,3 +20,16 @@ npx expo start
 - Account and subscription backend
 
 Never commit private keys, WireGuard configs, access tokens, or production credentials.
+
+
+## Architecture and integration notes
+
+- [System architecture](docs/architecture.md)
+- [Native WireGuard requirements](docs/native-wireguard.md)
+- [Control-plane API contract](docs/control-plane-api.md)
+
+The TypeScript profile validator and serializer are in `src/vpn/validation.ts`; shared native bridge types are in `src/vpn/types.ts`. A CI workflow runs the TypeScript check on pushes and pull requests.
+
+## Security status
+
+The current build is a client scaffold, not a production VPN. Native tunnel code, server infrastructure, secure provisioning, platform signing and leak testing remain required before any connection can be advertised as protected.
