@@ -7,24 +7,24 @@ const WIREGUARD_VERSION = "1.0.20260102";
 function withNexaAndroid(config) {
   config = withAppBuildGradle(config, (mod) => {
     let gradle = mod.modResults.contents;
-    const dependency = `implementation "com.wireguard.android:tunnel:${WIREGUARD_VERSION}"`;
+    const dependency = \`implementation "com.wireguard.android:tunnel:\${WIREGUARD_VERSION}"\`;
     if (!gradle.includes("com.wireguard.android:tunnel:")) {
-      const marker = /dependencies\\s*\\{/;
+      const marker = /dependencies\s*\{/;
       if (!marker.test(gradle)) throw new Error("NEXA VPN: could not find app Gradle dependencies block.");
-      gradle = gradle.replace(marker, (match) => `${match}\\n    ${dependency}`);
+      gradle = gradle.replace(marker, (match) => \`\${match}\n    \${dependency}\`);
     }
     if (!gradle.includes("coreLibraryDesugaringEnabled")) {
-      const compileOptions = /compileOptions\\s*\\{/;
+      const compileOptions = /compileOptions\s*\{/;
       if (compileOptions.test(gradle)) {
-        gradle = gradle.replace(compileOptions, (match) => `${match}\\n        coreLibraryDesugaringEnabled true`);
+        gradle = gradle.replace(compileOptions, (match) => \`\${match}\n        coreLibraryDesugaringEnabled true\`);
       } else {
-        const androidBlock = /android\\s*\\{/;
+        const androidBlock = /android\s*\{/;
         if (!androidBlock.test(gradle)) throw new Error("NEXA VPN: could not find Android Gradle block.");
-        gradle = gradle.replace(androidBlock, (match) => `${match}\\n    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_17\\n        targetCompatibility JavaVersion.VERSION_17\\n        coreLibraryDesugaringEnabled true\\n    }`);
+        gradle = gradle.replace(androidBlock, (match) => \`\${match}\n    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_17\n        targetCompatibility JavaVersion.VERSION_17\n        coreLibraryDesugaringEnabled true\n    }\`);
       }
     }
     if (!gradle.includes("desugar_jdk_libs:")) {
-      gradle = gradle.replace(/dependencies\\s*\\{/, (match) => `${match}\\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.5"`);
+      gradle = gradle.replace(/dependencies\s*\{/, (match) => \`\${match}\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.5"\`);
     }
     mod.modResults.contents = gradle;
     return mod;
@@ -37,7 +37,7 @@ function withNexaAndroid(config) {
     fs.mkdirSync(targetDir, { recursive: true });
     for (const file of ["NexaWireGuardController.kt", "NexaVpnModule.kt"]) {
       const source = path.join(sourceDir, file);
-      if (!fs.existsSync(source)) throw new Error(`NEXA VPN: missing native source ${source}`);
+      if (!fs.existsSync(source)) throw new Error(\`NEXA VPN: missing native source \${source}\`);
       fs.copyFileSync(source, path.join(targetDir, file));
     }
     return mod;
