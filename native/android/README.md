@@ -11,22 +11,9 @@ During Expo prebuild it:
 
 The dependency version `1.0.20260102` is published on Maven Central. The upstream WireGuard Android project documents the embeddable tunnel library and desugaring requirement.
 
-## Remaining manual step: register the React Native package
+## React Native package registration
 
-After `npx expo prebuild`, open the generated `MainApplication.kt`. Add the import:
-
-```kotlin
-import app.nexa.vpn.NexaVpnPackage
-```
-
-Then add `NexaVpnPackage()` to the package list inside `PackageList(this).packages.apply { ... }`:
-
-```kotlin
-PackageList(this).packages.apply {
-    add(NexaVpnPackage())
-}```
-
-Do not add a second copy if the package is already registered.
+The Expo config plugin also updates the generated `MainApplication.kt` to import and register `NexaVpnPackage()` in `PackageList(this).packages.apply { ... }`. It intentionally fails prebuild if the generated Kotlin structure is not recognized, rather than silently producing an app without the native module. Review the generated diff after every Expo SDK upgrade.
 
 ## Build and verify
 
@@ -42,6 +29,6 @@ The WireGuard AAR supplies its own VPN service manifest declaration; do not dupl
 
 ## Status
 
-The plugin automates source copying and Gradle dependency setup, but package registration remains manual. The repository does not yet contain a generated Android Gradle project, and no Android build or physical-device test has been completed. No server profile is included.
+The plugin automates source copying, Gradle dependency setup, and React Native package registration. The repository does not yet contain a generated Android Gradle project, and no Android build or physical-device test has been completed. No server profile is included.
 
 Never log or persist the WireGuard profile in plaintext. Do not claim the tunnel protects traffic until a real provisioned server and device-level leak tests are verified.
