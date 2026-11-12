@@ -2,6 +2,8 @@
 import Foundation
 import NetworkExtension
 import React
+import CryptoKit
+import Security
 
 @objc(NexaVpnModule)
 final class NexaVpnModule: RCTEventEmitter {
