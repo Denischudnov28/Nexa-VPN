@@ -8,6 +8,14 @@ Apply `migrations/001_initial_schema.sql` to PostgreSQL 16+ using a migration ru
 
 The schema deliberately does not store browsing history, DNS query contents, client private keys, raw payment card data or complete WireGuard client profiles.
 
+## Implemented API foundation
+
+The Fastify service currently provides health status, public healthy-gateway catalog, account registration, password login, access-token authentication for the current-account endpoint, rotating opaque refresh tokens, and logout. Passwords are stored as PBKDF2-SHA512 hashes; refresh tokens are stored only as SHA-256 hashes. Apply migrations `001_initial_schema.sql` and then `002_auth_sessions.sql` before starting the service.
+
+Set `ACCESS_TOKEN_SECRET` to at least 32 random characters (use a cryptographically random secret, e.g. `openssl rand -base64 48`). Keep it in the hosting provider's secret manager, never in Git. `DATABASE_SSL=require` should be used for a production database connection.
+
+**Not yet production-ready:** email verification and account recovery, device provisioning and peer revocation, subscription enforcement, payment provider adapters, admin roles/MFA, and gateway management are not implemented. Registration currently creates an active account; restrict access to a controlled beta until email verification and abuse controls are added.
+
 ## Required implementation order
 
 1. Authentication: verified email or another supported identity flow; short-lived access tokens and rotating refresh sessions; rate limits and account recovery.
