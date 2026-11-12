@@ -321,6 +321,40 @@ app.delete("/v1/devices/:deviceId", async (request, reply) => {
   } finally { client.release(); }
 });
 
+
+app.get("/v1/me/subscription", async (request, reply) => {
+  const claims = await authenticate(request);
+  if (!claims) return reply.code(401).send({ error: "UNAUTHORIZED" });
+  const account = await pool.query("SELECT 1 FROM accounts WHERE id = $1 AND status = 'active'", [claims.sub]);
+  if (!account.rowCount) return reply.code(401).send({ error: "UNAUTHORIZED" });
+  const result = await pool.query<{
+    plan_code: string; status: string; currency: string | null;
+    current_period_start: Date | null; current_period_end: Date | null;
+    cancel_at_period_end: boolean;
+  }>(
+    `SELECT plan_code, status, currency, current_period_start, current_period_end, cancel_at_period_end
+       FROM subscriptions
+      WHERE account_id = $1
+        AND status IN ('trialing', 'active', 'grace_period')
+        AND (current_period_end IS NULL OR current_period_end > now())
+      ORDER BY current_period_end DESC NULLS FIRST, created_at DESC
+      LIMIT 1`, [claims.sub],
+  );
+  const subscription = result.rows[0];
+  if (!subscription) return { subscription: null, entitled: false };
+  return {
+    subscription: {
+      planCode: subscription.plan_code,
+      status: subscription.status,
+      currency: subscription.currency,
+      currentPeriodStart: subscription.current_period_start,
+      currentPeriodEnd: subscription.current_period_end,
+      cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    },
+    entitled: true,
+  };
+});
+
 app.get("/v1/servers", async (_request, reply) => {
   try {
     const result = await pool.query<{
