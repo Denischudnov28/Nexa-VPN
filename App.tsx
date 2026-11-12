@@ -119,8 +119,14 @@ export default function App() {
         "AllowedIPs = 0.0.0.0/0, ::/0", "PersistentKeepalive = 25",
       ].join("\\n");
       setConfig(config);
-      setShowConfig(true);
-      setApiMessage("Профиль получен. Подтвердите системное разрешение VPN и подключитесь.");
+      const permission = await nexaNativeVpn.prepare();
+      if (!permission) {
+        setApiMessage("Нужно разрешить добавление VPN в системном окне.");
+        return;
+      }
+      const connectedState = await nexaNativeVpn.connect(config);
+      setState(connectedState);
+      setApiMessage("Профиль установлен. Состояние туннеля: " + connectedState);
     } catch (error) {
       setApiMessage(error instanceof Error ? error.message : "Не удалось получить профиль.");
     } finally { setApiBusy(false); }
