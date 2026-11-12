@@ -256,9 +256,13 @@ function requestLogError(error: unknown) {
   app.log.error({ databaseErrorCode: code }, "Database operation failed");
 }
 app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: "NOT_FOUND" }));
-app.setErrorHandler((error, _request, reply) => {
-  if (error.statusCode === 429) return reply.code(429).send({ error: "RATE_LIMITED" });
-  app.log.error({ errorCode: error.code ?? "UNKNOWN" }, "Unhandled request error");
+app.setErrorHandler((error: unknown, _request, reply) => {
+  const statusCode = typeof error === "object" && error !== null && "statusCode" in error
+    ? Number((error as { statusCode: unknown }).statusCode) : 500;
+  const errorCode = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code: unknown }).code) : "UNKNOWN";
+  if (statusCode === 429) return reply.code(429).send({ error: "RATE_LIMITED" });
+  app.log.error({ errorCode }, "Unhandled request error");
   return reply.code(500).send({ error: "INTERNAL_ERROR" });
 });
 const close = async () => { await app.close(); await pool.end(); };
