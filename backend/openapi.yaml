@@ -1,0 +1,114 @@
+openapi: 3.1.0
+info:
+  title: NEXA VPN Control Plane API
+  version: 0.1.0
+  description: Initial API contract. Not deployed. All routes require HTTPS.
+servers:
+  - url: https://api.example.invalid
+    description: Placeholder only; replace after deployment.
+security:
+  - bearerAuth: []
+paths:
+  /v1/health:
+    get:
+      security: []
+      summary: Liveness check
+      responses:
+        '200':
+          description: Service is alive
+  /v1/me:
+    get:
+      summary: Current account and entitlement summary
+      responses:
+        '200':
+          description: Account summary
+        '401':
+          description: Missing or invalid access token
+  /v1/devices:
+    get:
+      summary: List devices belonging to the current account
+      responses:
+        '200':
+          description: Device list
+    post:
+      summary: Register a device public key
+      description: Client generates the private key locally. Never send private key material.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform, publicKey]
+              properties:
+                platform:
+                  type: string
+                  enum: [android, ios]
+                label:
+                  type: string
+                  maxLength: 80
+                publicKey:
+                  type: string
+                  minLength: 43
+                  maxLength: 44
+      responses:
+        '201':
+          description: Device registered
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid access token
+  /v1/servers:
+    get:
+      summary: List healthy gateways available to the current subscription
+      responses:
+        '200':
+          description: Available server catalog
+        '401':
+          description: Missing or invalid access token
+  /v1/devices/{deviceId}/wireguard-profile:
+    post:
+      summary: Allocate a gateway peer and issue a device-specific profile
+      parameters:
+        - in: path
+          name: deviceId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Device-specific WireGuard profile; never cache or log response
+        '403':
+          description: Subscription is not entitled or device is not owned by account
+        '409':
+          description: No gateway capacity available
+  /v1/devices/{deviceId}:
+    delete:
+      summary: Revoke a device and remove its gateway peer
+      parameters:
+        - in: path
+          name: deviceId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Device revoked
+        '404':
+          description: Device not found for this account
+  /v1/me/subscription:
+    get:
+      summary: Read current subscription entitlement
+      responses:
+        '200':
+          description: Subscription status and period
+        '401':
+          description: Missing or invalid access token
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
