@@ -7,6 +7,46 @@ on:
     branches: [main]
 
 jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: nexa_test
+          POSTGRES_USER: nexa
+          POSTGRES_PASSWORD: nexa_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexa -d nexa_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package.json
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install
+      - name: Backend typecheck
+        working-directory: backend
+        run: npm run typecheck
+      - name: Backend production build
+        working-directory: backend
+        run: npm run build
+      - name: Validate PostgreSQL migration
+        env:
+          PGPASSWORD: nexa_test_password
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          psql -h 127.0.0.1 -U nexa -d nexa_test -v ON_ERROR_STOP=1 -f backend/migrations/001_initial_schema.sql
+
   validate:
     runs-on: ubuntu-latest
     steps:
