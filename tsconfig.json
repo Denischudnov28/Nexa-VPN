@@ -2,5 +2,11 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true
-  }
+  },
+  "exclude": [
+    "backend",
+    "node_modules",
+    "android",
+    "ios"
+  ]
 }
