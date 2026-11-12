@@ -8,7 +8,16 @@ import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.react.uimanager.ViewManager
-import java.util.concurrent.Executors\nimport android.security.keystore.KeyGenParameterSpec\nimport android.security.keystore.KeyProperties\nimport android.util.Base64\nimport com.wireguard.crypto.KeyPair\nimport javax.crypto.Cipher\nimport javax.crypto.KeyGenerator\nimport javax.crypto.SecretKey\nimport javax.crypto.spec.GCMParameterSpec\nimport org.json.JSONObject
+import java.util.concurrent.Executors
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import com.wireguard.crypto.KeyPair
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+import org.json.JSONObject
 
 /** Bridge around the official WireGuard GoBackend controller. */
 class NexaVpnModule(private val context: ReactApplicationContext) :
