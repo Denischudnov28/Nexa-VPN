@@ -596,6 +596,52 @@ app.post("/v1/devices/:deviceId/provisioning-requests", async (request, reply) =
   } finally { client.release(); }
 });
 
+
+app.get("/v1/devices/:deviceId/provisioning-status", async (request, reply) => {
+  const claims = await authenticate(request);
+  if (!claims) return reply.code(401).send({ error: "UNAUTHORIZED" });
+  const params = z.object({ deviceId: z.string().uuid() }).safeParse(request.params);
+  if (!params.success) return reply.code(400).send({ error: "INVALID_DEVICE_ID" });
+  const result = await pool.query<{
+    job_id: string | null; job_status: string | null; peer_status: string | null;
+    assigned_ipv4: string | null; endpoint_host: string | null; endpoint_port: number | null;
+    gateway_public_key: string | null; gateway_name: string | null;
+  }>(
+    `SELECT j.id AS job_id, j.status AS job_status, p.status AS peer_status,
+            p.assigned_ipv4::text AS assigned_ipv4, g.endpoint_host, g.endpoint_port,
+            g.public_key AS gateway_public_key, g.display_name AS gateway_name
+       FROM devices d
+       LEFT JOIN gateway_peers p ON p.device_id = d.id AND p.status IN ('provisioning','active')
+       LEFT JOIN gateways g ON g.id = p.gateway_id
+       LEFT JOIN LATERAL (
+         SELECT id, status FROM gateway_jobs
+          WHERE device_id = d.id AND action = 'provision_peer'
+          ORDER BY created_at DESC LIMIT 1
+       ) j ON true
+      WHERE d.id = $1 AND d.account_id = $2
+      LIMIT 1`,
+    [params.data.deviceId, claims.sub],
+  );
+  if (!result.rowCount) return reply.code(404).send({ error: "DEVICE_NOT_FOUND" });
+  const row = result.rows[0];
+  const entitled = await pool.query(
+    `SELECT 1 FROM subscriptions WHERE account_id = $1
+      AND status IN ('trialing','active','grace_period')
+      AND (current_period_end IS NULL OR current_period_end > now()) LIMIT 1`,
+    [claims.sub],
+  );
+  if (!entitled.rowCount) return reply.code(403).send({ error: "SUBSCRIPTION_REQUIRED" });
+  return {
+    requestId: row.job_id,
+    jobStatus: row.job_status,
+    deviceStatus: row.peer_status,
+    profile: row.peer_status === "active" && row.assigned_ipv4 && row.endpoint_host && row.gateway_public_key
+      ? { address: row.assigned_ipv4 + "/32", endpoint: row.endpoint_host + ":" + row.endpoint_port,
+          serverPublicKey: row.gateway_public_key, serverName: row.gateway_name, dns: ["1.1.1.1", "1.0.0.1"] }
+      : null,
+  };
+});
+
 app.get("/v1/me/subscription", async (request, reply) => {
   const claims = await authenticate(request);
   if (!claims) return reply.code(401).send({ error: "UNAUTHORIZED" });
