@@ -1,0 +1,21 @@
+[Unit]
+Description=NEXA VPN WireGuard gateway agent
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+Requires=wg-quick@wg0.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/nexa-gateway-agent.env
+ExecStart=/usr/local/bin/nexa-gateway-agent
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/etc/wireguard
+
+[Install]
+WantedBy=multi-user.target
