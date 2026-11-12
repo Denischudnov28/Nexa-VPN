@@ -1,5 +1,4 @@
-// NEXA VPN gateway agent: processes device revocation jobs only.
-// Provisioning jobs remain queued until the server-side IPAM/profile flow is implemented.
+// NEXA VPN gateway agent: provisions and revokes WireGuard peers.
 package main
 
 import (
@@ -10,7 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-\t"net"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -29,6 +28,7 @@ type job struct {
 	Action string `json:"action"`
 	DeviceID string `json:"device_id"`
 	PublicKey string `json:"public_key"`
+	AssignedIPv4 string `json:"assigned_ipv4"`
 }
 
 func required(name string) string {
@@ -88,7 +88,7 @@ func provisionPeer(iface, publicKey, assignedIPv4 string) (bool, error) {
 		return false, errors.New("invalid WireGuard public key received")
 	}
 	ip := net.ParseIP(assignedIPv4)
-\tif ip == nil || ip.To4() == nil {
+	if ip == nil || ip.To4() == nil {
 		return false, errors.New("invalid assigned IPv4 address received")
 	}
 	if output, err := exec.Command("wg", "set", iface, "peer", publicKey, "allowed-ips", assignedIPv4+"/32").CombinedOutput(); err != nil {
