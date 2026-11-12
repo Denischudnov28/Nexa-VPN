@@ -27,7 +27,10 @@ export default function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [servers, setServers] = useState<NexaServer[]>([]);\n  const [deviceId, setDeviceId] = useState<string | null>(null);\n  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);\n  const [keyPair, setKeyPair] = useState<{ privateKey: string; publicKey: string } | null>(null);
+  const [servers, setServers] = useState<NexaServer[]>([]);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+  const [keyPair, setKeyPair] = useState<{ privateKey: string; publicKey: string } | null>(null);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiMessage, setApiMessage] = useState("Укажите адрес развернутого сервера управления NEXA.");
   const [config, setConfig] = useState("");
