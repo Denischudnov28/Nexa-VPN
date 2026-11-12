@@ -123,6 +123,112 @@ async function authenticate(request: FastifyRequest): Promise<AccessClaims | nul
   return verifyAccessToken(header.slice(7));
 }
 
+
+function gatewayAgentAuthenticated(request: FastifyRequest, gatewayId: string): Promise<boolean> {
+  const supplied = request.headers["x-nexa-agent-token"];
+  if (typeof supplied !== "string" || supplied.length < 32 || supplied.length > 256) return Promise.resolve(false);
+  const suppliedHash = createHash("sha256").update(supplied).digest();
+  return pool.query<{ agent_token_hash: string }>(
+    "SELECT agent_token_hash FROM gateways WHERE id = $1 AND agent_token_hash IS NOT NULL",
+    [gatewayId],
+  ).then((result) => {
+    const stored = result.rows[0]?.agent_token_hash;
+    if (!stored || !/^[a-f0-9]{64}$/i.test(stored)) return false;
+    const expected = Buffer.from(stored, "hex");
+    return expected.length === suppliedHash.length && timingSafeEqual(expected, suppliedHash);
+  });
+}
+
+app.post("/v1/gateway-agent/jobs/claim", async (request, reply) => {
+  const parsedBody = z.object({ gatewayId: z.string().uuid() }).safeParse(request.body);
+  if (!parsedBody.success) return reply.code(400).send({ error: "INVALID_GATEWAY" });
+  const gatewayId = parsedBody.data.gatewayId;
+  if (!await gatewayAgentAuthenticated(request, gatewayId)) return reply.code(401).send({ error: "AGENT_UNAUTHORIZED" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const gateway = await client.query(
+      "UPDATE gateways SET agent_last_seen_at = now() WHERE id = $1 AND status IN ('online','degraded') RETURNING id",
+      [gatewayId],
+    );
+    if (!gateway.rowCount) {
+      await client.query("ROLLBACK");
+      return reply.code(404).send({ error: "GATEWAY_NOT_AVAILABLE" });
+    }
+    const claimed = await client.query<{ id: string; action: string; device_id: string; public_key: string }>(
+      `WITH candidate AS (
+         SELECT j.id FROM gateway_jobs j
+          WHERE j.gateway_id = $1 AND j.action = 'revoke_peer'
+            AND (j.status = 'queued' OR (j.status = 'leased' AND j.lease_expires_at < now()))
+            AND j.available_at <= now()
+          ORDER BY j.created_at
+          FOR UPDATE SKIP LOCKED LIMIT 1
+       )
+       UPDATE gateway_jobs j
+          SET status = 'leased', lease_owner = $2, lease_expires_at = now() + interval '60 seconds',
+              attempt_count = attempt_count + 1, updated_at = now()
+         FROM candidate c, devices d
+        WHERE j.id = c.id AND d.id = j.device_id
+       RETURNING j.id, j.action, j.device_id, d.public_key`,
+      [gatewayId, gatewayId],
+    );
+    await client.query("COMMIT");
+    if (!claimed.rowCount) return { job: null };
+    return { job: claimed.rows[0] };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    requestLogError(error);
+    return reply.code(503).send({ error: "AGENT_QUEUE_UNAVAILABLE" });
+  } finally { client.release(); }
+});
+
+app.post("/v1/gateway-agent/jobs/:jobId/complete", async (request, reply) => {
+  const params = z.object({ jobId: z.string().uuid() }).safeParse(request.params);
+  const body = z.object({ gatewayId: z.string().uuid(), success: z.boolean() }).safeParse(request.body);
+  if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_JOB_RESULT" });
+  const { gatewayId, success } = body.data;
+  if (!await gatewayAgentAuthenticated(request, gatewayId)) return reply.code(401).send({ error: "AGENT_UNAUTHORIZED" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const job = await client.query<{ id: string; device_id: string; action: string }>(
+      `SELECT id, device_id, action FROM gateway_jobs
+        WHERE id = $1 AND gateway_id = $2 AND status = 'leased'
+          AND lease_owner = $2 AND lease_expires_at > now()
+        FOR UPDATE`,
+      [params.data.jobId, gatewayId],
+    );
+    if (!job.rowCount) {
+      await client.query("ROLLBACK");
+      return reply.code(404).send({ error: "LEASE_NOT_FOUND_OR_EXPIRED" });
+    }
+    if (success && job.rows[0].action === "revoke_peer") {
+      const peer = await client.query(
+        "UPDATE gateway_peers SET status = 'revoked', revoked_at = now() WHERE device_id = $1 AND gateway_id = $2 AND status = 'revoking' RETURNING id",
+        [job.rows[0].device_id, gatewayId],
+      );
+      if (peer.rowCount) await client.query(
+        "UPDATE gateways SET active_peers = GREATEST(0, active_peers - 1), updated_at = now() WHERE id = $1",
+        [gatewayId],
+      );
+    }
+    await client.query(
+      `UPDATE gateway_jobs
+          SET status = $2, completed_at = CASE WHEN $2 = 'succeeded' THEN now() ELSE NULL END,
+              lease_owner = NULL, lease_expires_at = NULL, updated_at = now(),
+              last_error_code = CASE WHEN $2 = 'failed' THEN 'AGENT_OPERATION_FAILED' ELSE NULL END
+        WHERE id = $1`,
+      [params.data.jobId, success ? "succeeded" : "failed"],
+    );
+    await client.query("COMMIT");
+    return reply.code(204).send();
+  } catch (error) {
+    await client.query("ROLLBACK");
+    requestLogError(error);
+    return reply.code(503).send({ error: "AGENT_RESULT_UNAVAILABLE" });
+  } finally { client.release(); }
+});
+
 app.get("/v1/health", async (_request, reply) => {
   try { await pool.query("SELECT 1"); return { status: "ok", database: "ready" }; }
   catch { return reply.code(503).send({ status: "degraded", database: "unavailable" }); }
