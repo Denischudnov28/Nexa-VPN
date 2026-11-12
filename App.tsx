@@ -3,7 +3,8 @@ import {
   Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { StatusBar as ExpoStatusBar } from "expo-status-bar";
-import { nexaNativeVpn, type NativeVpnState } from "./src/vpn/native";\nimport { nexaApi, type NexaServer } from "./src/api";
+import { nexaNativeVpn, type NativeVpnState } from "./src/vpn/native";
+import { nexaApi, type NexaServer } from "./src/api";
 
 const isValidConfig = (value: string) => {
   const text = value.trim();
@@ -22,7 +23,14 @@ const stateLabel: Record<NativeVpnState, string> = {
 };
 
 export default function App() {
-  const [apiUrl, setApiUrl] = useState("");\n  const [email, setEmail] = useState("");\n  const [password, setPassword] = useState("");\n  const [accessToken, setAccessToken] = useState<string | null>(null);\n  const [servers, setServers] = useState<NexaServer[]>([]);\n  const [apiBusy, setApiBusy] = useState(false);\n  const [apiMessage, setApiMessage] = useState("Укажите адрес развернутого сервера управления NEXA.");\n  const [config, setConfig] = useState("");
+  const [apiUrl, setApiUrl] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [servers, setServers] = useState<NexaServer[]>([]);
+  const [apiBusy, setApiBusy] = useState(false);
+  const [apiMessage, setApiMessage] = useState("Укажите адрес развернутого сервера управления NEXA.");
+  const [config, setConfig] = useState("");
   const [state, setState] = useState<NativeVpnState>("disconnected");
   const [busy, setBusy] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
@@ -173,7 +181,15 @@ export default function App() {
               autoCapitalize="none"
               autoCorrect={false}
               spellCheck={false}
-              placeholder={"[Interface]\nPrivateKey = …\nAddress = …\nDNS = …\n\n[Peer]\nPublicKey = …\nEndpoint = host:51820\nAllowedIPs = 0.0.0.0/0, ::/0"}
+              placeholder={"[Interface]
+PrivateKey = …
+Address = …
+DNS = …
+
+[Peer]
+PublicKey = …
+Endpoint = host:51820
+AllowedIPs = 0.0.0.0/0, ::/0"}
               placeholderTextColor="#60758A"
               style={styles.configInput}
               textAlignVertical="top"
@@ -223,7 +239,11 @@ const styles = StyleSheet.create({
   sectionTitle: { color: "#8FA3B8", fontSize: 13, fontWeight: "600", marginBottom: 12 },
   serverName: { color: "#FFFFFF", fontSize: 17, fontWeight: "700" },
   serverHint: { color: "#91A4B8", fontSize: 12, lineHeight: 19, marginTop: 7 },
-  fieldInput: { marginTop: 12, borderRadius: 12, borderWidth: 1, borderColor: "#29435D", backgroundColor: "#091727", color: "#EAF2FA", padding: 13, fontSize: 14 },\n  authActions: { flexDirection: "row", justifyContent: "space-between", marginTop: 14 },\n  smallAction: { color: "#57D6C5", fontWeight: "800", paddingVertical: 10 },\n  serverRow: { flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "#29435D", paddingVertical: 12 },\n  configInput: { minHeight: 220, marginTop: 16, borderRadius: 14, borderWidth: 1, borderColor: "#29435D", backgroundColor: "#091727", color: "#EAF2FA", padding: 14, fontSize: 12, lineHeight: 18, fontFamily: "monospace" },
+  fieldInput: { marginTop: 12, borderRadius: 12, borderWidth: 1, borderColor: "#29435D", backgroundColor: "#091727", color: "#EAF2FA", padding: 13, fontSize: 14 },
+  authActions: { flexDirection: "row", justifyContent: "space-between", marginTop: 14 },
+  smallAction: { color: "#57D6C5", fontWeight: "800", paddingVertical: 10 },
+  serverRow: { flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "#29435D", paddingVertical: 12 },
+  configInput: { minHeight: 220, marginTop: 16, borderRadius: 14, borderWidth: 1, borderColor: "#29435D", backgroundColor: "#091727", color: "#EAF2FA", padding: 14, fontSize: 12, lineHeight: 18, fontFamily: "monospace" },
   cancel: { color: "#8FA3B8", textAlign: "center", marginTop: 16, padding: 8 },
   footer: { color: "#50657A", textAlign: "center", marginTop: "auto", paddingTop: 28, fontSize: 11 },
 });
