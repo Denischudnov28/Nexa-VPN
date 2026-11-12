@@ -107,7 +107,7 @@ paths:
         '401': { description: Missing or invalid access token }
     post:
       summary: Register a device public key
-      description: Client generates the private key locally. Never send private key material.
+      description: Client generates the private key locally. Never send private key material. Maximum five non-revoked devices per account.
       requestBody:
         required: true
         content:
@@ -137,14 +137,14 @@ paths:
         '409': { description: No gateway capacity available }
   /v1/devices/{deviceId}:
     delete:
-      summary: Revoke a device and remove its gateway peer
+      summary: Revoke a device; gateway peer cleanup requires the gateway agent
       parameters:
         - in: path
           name: deviceId
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '204': { description: Device revoked }
+        '204': { description: Device revoked; associated gateway peers are marked revoking pending agent acknowledgement }
         '404': { description: Device not found for this account }
   /v1/me/subscription:
     get:
