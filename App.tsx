@@ -3,7 +3,7 @@ import {
   Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { StatusBar as ExpoStatusBar } from "expo-status-bar";
-import { nexaNativeVpn, type NativeVpnState } from "./src/vpn/native";
+import { nexaNativeVpn, type NativeVpnState } from "./src/vpn/native";\nimport { nexaApi, type NexaServer } from "./src/api";
 
 const isValidConfig = (value: string) => {
   const text = value.trim();
@@ -22,7 +22,7 @@ const stateLabel: Record<NativeVpnState, string> = {
 };
 
 export default function App() {
-  const [config, setConfig] = useState("");
+  const [apiUrl, setApiUrl] = useState("");\n  const [email, setEmail] = useState("");\n  const [password, setPassword] = useState("");\n  const [accessToken, setAccessToken] = useState<string | null>(null);\n  const [servers, setServers] = useState<NexaServer[]>([]);\n  const [apiBusy, setApiBusy] = useState(false);\n  const [apiMessage, setApiMessage] = useState("Укажите адрес развернутого сервера управления NEXA.");\n  const [config, setConfig] = useState("");
   const [state, setState] = useState<NativeVpnState>("disconnected");
   const [busy, setBusy] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
@@ -39,6 +39,32 @@ export default function App() {
     });
     return () => { mounted = false; subscription.remove(); };
   }, []);
+
+  const handleAuth = async (mode: "login" | "register") => {
+    setApiBusy(true);
+    try {
+      const session = mode === "login"
+        ? await nexaApi.login(apiUrl, email, password)
+        : await nexaApi.register(apiUrl, email, password);
+      setAccessToken(session.accessToken);
+      setApiMessage("Вход выполнен: " + session.account.email);
+      const catalog = await nexaApi.servers(apiUrl);
+      setServers(catalog.servers);
+    } catch (error) {
+      setApiMessage(error instanceof Error ? error.message : "Не удалось связаться с NEXA API.");
+    } finally { setApiBusy(false); }
+  };
+
+  const refreshServers = async () => {
+    setApiBusy(true);
+    try {
+      const catalog = await nexaApi.servers(apiUrl);
+      setServers(catalog.servers);
+      setApiMessage(catalog.servers.length ? "Доступные серверы обновлены." : "Серверы пока не опубликованы.");
+    } catch (error) {
+      setApiMessage(error instanceof Error ? error.message : "Каталог недоступен.");
+    } finally { setApiBusy(false); }
+  };
 
   const connected = state === "connected" || state === "up";
   const working = busy || state === "connecting" || state === "disconnecting";
@@ -108,6 +134,34 @@ export default function App() {
           {!connected && <Text style={styles.note}>NEXA only reports a protected connection after the native WireGuard tunnel confirms it.</Text>}
         </View>
 
+        <View style={styles.serverCard}>
+          <Text style={styles.sectionTitle}>NEXA account & server catalog</Text>
+          <Text style={styles.serverHint}>Enter the HTTPS address of the deployed NEXA control plane. This build does not contain a production API address yet.</Text>
+          <TextInput value={apiUrl} onChangeText={setApiUrl} autoCapitalize="none" autoCorrect={false}
+            placeholder="https://api.example.com" placeholderTextColor="#60758A" style={styles.fieldInput} />
+          {!accessToken ? <>
+            <TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address"
+              placeholder="Email" placeholderTextColor="#60758A" style={styles.fieldInput} />
+            <TextInput value={password} onChangeText={setPassword} secureTextEntry
+              placeholder="Password (12+ characters)" placeholderTextColor="#60758A" style={styles.fieldInput} />
+            <View style={styles.authActions}>
+              <Text accessibilityRole="button" onPress={apiBusy ? undefined : () => handleAuth("login")} style={styles.smallAction}>Sign in</Text>
+              <Text accessibilityRole="button" onPress={apiBusy ? undefined : () => handleAuth("register")} style={styles.smallAction}>Create account</Text>
+            </View>
+          </> : <>
+            <Text style={styles.serverHint}>Authenticated session is held in memory for this app session.</Text>
+            <Text accessibilityRole="button" onPress={apiBusy ? undefined : refreshServers} style={styles.smallAction}>Refresh server list</Text>
+          </>}
+          <Text style={styles.serverHint}>{apiBusy ? "Connecting…" : apiMessage}</Text>
+          {servers.map((server) => <View key={server.id} style={styles.serverRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.serverName}>{server.name}</Text>
+              <Text style={styles.serverHint}>{server.city}, {server.countryCode} · load {server.loadPercent}%</Text>
+            </View>
+          </View>)}
+          <Text style={styles.note}>Selecting a server and automatic key provisioning are not enabled until the control plane is deployed and the native key-generation flow is completed.</Text>
+        </View>
+
         {showConfig && !connected && (
           <View style={styles.serverCard}>
             <Text style={styles.sectionTitle}>WireGuard configuration</Text>
@@ -169,7 +223,7 @@ const styles = StyleSheet.create({
   sectionTitle: { color: "#8FA3B8", fontSize: 13, fontWeight: "600", marginBottom: 12 },
   serverName: { color: "#FFFFFF", fontSize: 17, fontWeight: "700" },
   serverHint: { color: "#91A4B8", fontSize: 12, lineHeight: 19, marginTop: 7 },
-  configInput: { minHeight: 220, marginTop: 16, borderRadius: 14, borderWidth: 1, borderColor: "#29435D", backgroundColor: "#091727", color: "#EAF2FA", padding: 14, fontSize: 12, lineHeight: 18, fontFamily: "monospace" },
+  fieldInput: { marginTop: 12, borderRadius: 12, borderWidth: 1, borderColor: "#29435D", backgroundColor: "#091727", color: "#EAF2FA", padding: 13, fontSize: 14 },\n  authActions: { flexDirection: "row", justifyContent: "space-between", marginTop: 14 },\n  smallAction: { color: "#57D6C5", fontWeight: "800", paddingVertical: 10 },\n  serverRow: { flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "#29435D", paddingVertical: 12 },\n  configInput: { minHeight: 220, marginTop: 16, borderRadius: 14, borderWidth: 1, borderColor: "#29435D", backgroundColor: "#091727", color: "#EAF2FA", padding: 14, fontSize: 12, lineHeight: 18, fontFamily: "monospace" },
   cancel: { color: "#8FA3B8", textAlign: "center", marginTop: 16, padding: 8 },
   footer: { color: "#50657A", textAlign: "center", marginTop: "auto", paddingTop: 28, fontSize: 11 },
 });
