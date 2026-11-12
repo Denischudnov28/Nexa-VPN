@@ -48,6 +48,19 @@ jobs:
           psql -h 127.0.0.1 -U nexa -d nexa_test -v ON_ERROR_STOP=1 -f backend/migrations/001_initial_schema.sql
           psql -h 127.0.0.1 -U nexa -d nexa_test -v ON_ERROR_STOP=1 -f backend/migrations/002_auth_sessions.sql\n          psql -h 127.0.0.1 -U nexa -d nexa_test -v ON_ERROR_STOP=1 -f backend/migrations/003_gateway_jobs.sql\n          psql -h 127.0.0.1 -U nexa -d nexa_test -v ON_ERROR_STOP=1 -f backend/migrations/004_gateway_agent_auth.sql
 
+  gateway-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Test gateway agent
+        working-directory: gateway-agent
+        run: |
+          go test ./...
+          go build -trimpath -o /tmp/nexa-gateway-agent .
+
   validate:
     runs-on: ubuntu-latest
     steps:
