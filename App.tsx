@@ -181,15 +181,7 @@ export default function App() {
               autoCapitalize="none"
               autoCorrect={false}
               spellCheck={false}
-              placeholder={"[Interface]
-PrivateKey = …
-Address = …
-DNS = …
-
-[Peer]
-PublicKey = …
-Endpoint = host:51820
-AllowedIPs = 0.0.0.0/0, ::/0"}
+              placeholder={"[Interface]\\nPrivateKey = …\\nAddress = …\\nDNS = …\\n\\n[Peer]\\nPublicKey = …\\nEndpoint = host:51820\\nAllowedIPs = 0.0.0.0/0, ::/0"}
               placeholderTextColor="#60758A"
               style={styles.configInput}
               textAlignVertical="top"
