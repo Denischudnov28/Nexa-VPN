@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
-  Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, View,
+  Alert, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { StatusBar as ExpoStatusBar } from "expo-status-bar";
 import { nexaNativeVpn, type NativeVpnState } from "./src/vpn/native";
@@ -27,7 +27,7 @@ export default function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [servers, setServers] = useState<NexaServer[]>([]);
+  const [servers, setServers] = useState<NexaServer[]>([]);\n  const [deviceId, setDeviceId] = useState<string | null>(null);\n  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);\n  const [keyPair, setKeyPair] = useState<{ privateKey: string; publicKey: string } | null>(null);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiMessage, setApiMessage] = useState("Укажите адрес развернутого сервера управления NEXA.");
   const [config, setConfig] = useState("");
@@ -56,7 +56,7 @@ export default function App() {
         : await nexaApi.register(apiUrl, email, password);
       setAccessToken(session.accessToken);
       setApiMessage("Вход выполнен: " + session.account.email);
-      const catalog = await nexaApi.servers(apiUrl);
+      const catalog = await nexaApi.servers(apiUrl, session.accessToken);
       setServers(catalog.servers);
     } catch (error) {
       setApiMessage(error instanceof Error ? error.message : "Не удалось связаться с NEXA API.");
@@ -66,11 +66,63 @@ export default function App() {
   const refreshServers = async () => {
     setApiBusy(true);
     try {
-      const catalog = await nexaApi.servers(apiUrl);
+      const catalog = await nexaApi.servers(apiUrl, accessToken ?? undefined);
       setServers(catalog.servers);
       setApiMessage(catalog.servers.length ? "Доступные серверы обновлены." : "Серверы пока не опубликованы.");
     } catch (error) {
       setApiMessage(error instanceof Error ? error.message : "Каталог недоступен.");
+    } finally { setApiBusy(false); }
+  };
+
+  const handleProvision = async (server: NexaServer) => {
+    if (!accessToken) return;
+    setApiBusy(true);
+    setSelectedServerId(server.id);
+    try {
+      const keys = await nexaNativeVpn.getOrCreateKeyPair();
+      setKeyPair(keys);
+      let currentDeviceId = deviceId;
+      if (!currentDeviceId) {
+        const known = await nexaApi.devices(apiUrl, accessToken);
+        const existing = known.devices.find((device) => device.publicKey === keys.publicKey && device.status !== "revoked");
+        if (existing) currentDeviceId = existing.id;
+        else {
+          const created = await nexaApi.createDevice(
+            apiUrl, accessToken, Platform.OS === "ios" ? "ios" : "android", keys.publicKey, "NEXA device",
+          );
+          currentDeviceId = created.device.id;
+        }
+        setDeviceId(currentDeviceId);
+      }
+      const result = await nexaApi.provisionDevice(apiUrl, accessToken, currentDeviceId, server.id);
+      setApiMessage("Запрос отправлен. Статус: " + result.status + ". Нажмите «Проверить подключение» через несколько секунд.");
+    } catch (error) {
+      setApiMessage(error instanceof Error ? error.message : "Не удалось создать VPN-подключение.");
+    } finally { setApiBusy(false); }
+  };
+
+  const handleCheckProvision = async () => {
+    if (!accessToken || !deviceId) return;
+    setApiBusy(true);
+    try {
+      const keys = keyPair ?? await nexaNativeVpn.getOrCreateKeyPair();
+      setKeyPair(keys);
+      const result = await nexaApi.deviceStatus(apiUrl, accessToken, deviceId);
+      if (!result.profile) {
+        setApiMessage("Подключение ещё готовится. Задача: " + (result.jobStatus ?? "ожидание") + ". Устройство: " + (result.deviceStatus ?? "ожидание"));
+        return;
+      }
+      const config = [
+        "[Interface]", "PrivateKey = " + keys.privateKey, "Address = " + result.profile.address,
+        "DNS = " + result.profile.dns.join(", "), "", "[Peer]",
+        "PublicKey = " + result.profile.serverPublicKey, "Endpoint = " + result.profile.endpoint,
+        "AllowedIPs = 0.0.0.0/0, ::/0", "PersistentKeepalive = 25",
+      ].join("\\n");
+      setConfig(config);
+      setShowConfig(true);
+      setApiMessage("Профиль получен. Подтвердите системное разрешение VPN и подключитесь.");
+    } catch (error) {
+      setApiMessage(error instanceof Error ? error.message : "Не удалось получить профиль.");
     } finally { setApiBusy(false); }
   };
 
@@ -166,8 +218,14 @@ export default function App() {
               <Text style={styles.serverName}>{server.name}</Text>
               <Text style={styles.serverHint}>{server.city}, {server.countryCode} · load {server.loadPercent}%</Text>
             </View>
+            <Text accessibilityRole="button" onPress={apiBusy ? undefined : () => handleProvision(server)} style={styles.smallAction}>
+              {selectedServerId === server.id && apiBusy ? "…" : "Подключить"}
+            </Text>
           </View>)}
-          <Text style={styles.note}>Selecting a server and automatic key provisioning are not enabled until the control plane is deployed and the native key-generation flow is completed.</Text>
+          {deviceId && <Text accessibilityRole="button" onPress={apiBusy ? undefined : handleCheckProvision} style={styles.smallAction}>
+            Проверить подключение и получить профиль
+          </Text>}
+          <Text style={styles.note}>Ключ создаётся на устройстве. На Android он шифруется ключом Android Keystore, на iOS хранится в Keychain. Для выдачи профиля требуется активная подписка и работающий VPN-шлюз.</Text>
         </View>
 
         {showConfig && !connected && (
