@@ -20,6 +20,7 @@ export const nexaApi = {
   register: (base: string, email: string, password: string) =>
     request<SessionResponse>(base, "/v1/auth/register", { method: "POST", body: JSON.stringify({ email, password }) }),
   servers: (base: string, token?: string) => request<{ servers: NexaServer[] }>(base, "/v1/servers", {}, token),
+  devices: (base: string, token: string) => request<{ devices: { id: string; publicKey: string; status: string }[] }>(base, "/v1/devices", {}, token),
   createDevice: (base: string, token: string, platform: "android" | "ios", publicKey: string, label: string) =>
     request<{ device: { id: string; status: string } }>(base, "/v1/devices", {
       method: "POST", body: JSON.stringify({ platform, publicKey, label }),
