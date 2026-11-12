@@ -1,9 +1,12 @@
-import Fastify from "fastify";
+import { createHash, createHmac, pbkdf2 as pbkdf2Callback, randomBytes, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
+import Fastify, { type FastifyRequest } from "fastify";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { z } from "zod";
 
+const pbkdf2 = promisify(pbkdf2Callback);
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().default("0.0.0.0"),
@@ -11,16 +14,16 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   DATABASE_SSL: z.enum(["disable", "require"]).default("require"),
   RATE_LIMIT_MAX: z.coerce.number().int().min(10).max(1000).default(120),
+  ACCESS_TOKEN_SECRET: z.string().min(32),
+  ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(300).max(3600).default(900),
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(30),
 });
-
 const parsed = envSchema.safeParse(process.env);
 if (!parsed.success) {
-  // Do not print environment values: DATABASE_URL may contain credentials.
   console.error("Invalid control-plane environment configuration.");
   process.exit(1);
 }
 const env = parsed.data;
-
 const pool = new Pool({
   connectionString: env.DATABASE_URL,
   ssl: env.DATABASE_SSL === "require" ? { rejectUnauthorized: true } : undefined,
@@ -28,67 +31,219 @@ const pool = new Pool({
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
 });
-
 const app = Fastify({
-  logger: {
-    level: env.NODE_ENV === "production" ? "info" : "debug",
-    redact: ["req.headers.authorization", "req.headers.cookie"],
-  },
+  logger: { level: env.NODE_ENV === "production" ? "info" : "debug",
+    redact: ["req.headers.authorization", "req.headers.cookie", "req.body.password", "req.body.refreshToken"] },
   bodyLimit: 16 * 1024,
   requestTimeout: 10_000,
 });
-
 await app.register(helmet);
-await app.register(rateLimit, {
-  max: env.RATE_LIMIT_MAX,
-  timeWindow: "1 minute",
-  hook: "onRequest",
-});
+await app.register(rateLimit, { max: env.RATE_LIMIT_MAX, timeWindow: "1 minute", hook: "onRequest" });
+
+type AccessClaims = { sub: string; email: string; iat: number; exp: number; iss: "nexa-vpn" };
+type AccountRow = { id: string; email: string; password_hash: string | null; status: string };
+const emailSchema = z.string().trim().email().max(254).transform((v) => v.toLowerCase());
+const passwordSchema = z.string().min(12).max(128);
+const registerSchema = z.object({ email: emailSchema, password: passwordSchema, countryCode: z.string().regex(/^[A-Za-z]{2}$/).optional() });
+const loginSchema = z.object({ email: emailSchema, password: z.string().min(1).max(128) });
+const refreshSchema = z.object({ refreshToken: z.string().min(40).max(200) });
+
+function b64url(value: Buffer | string): string {
+  return Buffer.from(value).toString("base64url");
+}
+function signAccessToken(account: { id: string; email: string }): string {
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const payload: AccessClaims = { sub: account.id, email: account.email, iat: now,
+    exp: now + env.ACCESS_TOKEN_TTL_SECONDS, iss: "nexa-vpn" };
+  const body = b64url(JSON.stringify(payload));
+  const input = header + "." + body;
+  const signature = createHmac("sha256", env.ACCESS_TOKEN_SECRET).update(input).digest("base64url");
+  return input + "." + signature;
+}
+function verifyAccessToken(token: string): AccessClaims | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const input = parts[0] + "." + parts[1];
+  const expected = createHmac("sha256", env.ACCESS_TOKEN_SECRET).update(input).digest();
+  let supplied: Buffer;
+  try { supplied = Buffer.from(parts[2], "base64url"); } catch { return null; }
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as AccessClaims;
+    if (claims.iss !== "nexa-vpn" || typeof claims.sub !== "string" ||
+        typeof claims.email !== "string" || !Number.isInteger(claims.exp) ||
+        claims.exp <= Math.floor(Date.now() / 1000)) return null;
+    return claims;
+  } catch { return null; }
+}
+async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16);
+  const derived = await pbkdf2(password, salt, 310_000, 64, "sha512") as Buffer;
+  return "pbkdf2-sha512$310000$" + salt.toString("base64url") + "$" + derived.toString("base64url");
+}
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [algorithm, iterationsText, saltText, hashText] = stored.split("$");
+  const iterations = Number(iterationsText);
+  if (algorithm !== "pbkdf2-sha512" || !Number.isInteger(iterations) || iterations < 100_000 || iterations > 1_000_000 || !saltText || !hashText) return false;
+  try {
+    const expected = Buffer.from(hashText, "base64url");
+    const actual = await pbkdf2(password, Buffer.from(saltText, "base64url"), iterations, expected.length, "sha512") as Buffer;
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  } catch { return false; }
+}
+function newRefreshToken(): string { return randomBytes(48).toString("base64url"); }
+function tokenHash(token: string): string { return createHash("sha256").update(token).digest("hex"); }
+function refreshExpiry(): Date { return new Date(Date.now() + env.REFRESH_TOKEN_TTL_DAYS * 86_400_000); }
+
+async function issueSession(client: PoolClient, account: { id: string; email: string }, familyId?: string) {
+  const refreshToken = newRefreshToken();
+  const inserted = await client.query<{ id: string }>(
+    `INSERT INTO auth_sessions(account_id, family_id, refresh_token_hash, expires_at)
+     VALUES ($1, COALESCE($2::uuid, gen_random_uuid()), $3, $4) RETURNING id`,
+    [account.id, familyId ?? null, tokenHash(refreshToken), refreshExpiry()],
+  );
+  return { accessToken: signAccessToken(account), refreshToken, tokenType: "Bearer",
+    expiresIn: env.ACCESS_TOKEN_TTL_SECONDS, sessionId: inserted.rows[0].id };
+}
+async function authenticate(request: FastifyRequest): Promise<AccessClaims | null> {
+  const header = request.headers.authorization;
+  if (!header?.startsWith("Bearer ")) return null;
+  return verifyAccessToken(header.slice(7));
+}
 
 app.get("/v1/health", async (_request, reply) => {
+  try { await pool.query("SELECT 1"); return { status: "ok", database: "ready" }; }
+  catch { return reply.code(503).send({ status: "degraded", database: "unavailable" }); }
+});
+
+app.post("/v1/auth/register", { config: { rateLimit: { max: 5, timeWindow: "1 hour" } } }, async (request, reply) => {
+  const parsedBody = registerSchema.safeParse(request.body);
+  if (!parsedBody.success) return reply.code(400).send({ error: "INVALID_REGISTRATION" });
+  const { email, password, countryCode } = parsedBody.data;
+  const passwordHash = await hashPassword(password);
+  const client = await pool.connect();
   try {
-    await pool.query("SELECT 1");
-    return { status: "ok", database: "ready" };
-  } catch {
-    return reply.code(503).send({ status: "degraded", database: "unavailable" });
-  }
+    await client.query("BEGIN");
+    const inserted = await client.query<{ id: string; email: string }>(
+      `INSERT INTO accounts(email, password_hash, country_code)
+       VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING RETURNING id, email`,
+      [email, passwordHash, countryCode?.toUpperCase() ?? null],
+    );
+    if (!inserted.rowCount) {
+      await client.query("ROLLBACK");
+      return reply.code(409).send({ error: "ACCOUNT_ALREADY_EXISTS" });
+    }
+    const session = await issueSession(client, inserted.rows[0]);
+    await client.query("COMMIT");
+    return reply.code(201).send({ account: { id: inserted.rows[0].id, email }, ...session });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    requestLogError(error);
+    return reply.code(503).send({ error: "REGISTRATION_UNAVAILABLE" });
+  } finally { client.release(); }
+});
+
+app.post("/v1/auth/login", { config: { rateLimit: { max: 10, timeWindow: "15 minutes" } } }, async (request, reply) => {
+  const parsedBody = loginSchema.safeParse(request.body);
+  if (!parsedBody.success) return reply.code(400).send({ error: "INVALID_CREDENTIALS" });
+  const { email, password } = parsedBody.data;
+  const result = await pool.query<AccountRow>(
+    "SELECT id, email, password_hash, status FROM accounts WHERE email = $1 LIMIT 1", [email],
+  );
+  const account = result.rows[0];
+  const valid = account?.password_hash ? await verifyPassword(password, account.password_hash) : false;
+  if (!account || !valid || account.status !== "active") return reply.code(401).send({ error: "INVALID_EMAIL_OR_PASSWORD" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const session = await issueSession(client, account);
+    await client.query("COMMIT");
+    return { account: { id: account.id, email: account.email }, ...session };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    requestLogError(error);
+    return reply.code(503).send({ error: "LOGIN_UNAVAILABLE" });
+  } finally { client.release(); }
+});
+
+app.post("/v1/auth/refresh", { config: { rateLimit: { max: 20, timeWindow: "15 minutes" } } }, async (request, reply) => {
+  const parsedBody = refreshSchema.safeParse(request.body);
+  if (!parsedBody.success) return reply.code(400).send({ error: "INVALID_REFRESH_TOKEN" });
+  const oldToken = parsedBody.data.refreshToken;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const found = await client.query<{
+      id: string; account_id: string; family_id: string; email: string; status: string;
+      expires_at: Date; revoked_at: Date | null;
+    }>(
+      `SELECT s.id, s.account_id, s.family_id, a.email, a.status, s.expires_at, s.revoked_at
+         FROM auth_sessions s JOIN accounts a ON a.id = s.account_id
+        WHERE s.refresh_token_hash = $1 FOR UPDATE OF s`, [tokenHash(oldToken)],
+    );
+    const session = found.rows[0];
+    if (!session || session.revoked_at || new Date(session.expires_at).getTime() <= Date.now() || session.status !== "active") {
+      if (session?.revoked_at) {
+        await client.query("UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE family_id = $1", [session.family_id]);
+      }
+      await client.query("COMMIT");
+      return reply.code(401).send({ error: "INVALID_REFRESH_TOKEN" });
+    }
+    const next = await issueSession(client, { id: session.account_id, email: session.email }, session.family_id);
+    await client.query(
+      "UPDATE auth_sessions SET revoked_at = now(), last_used_at = now(), replaced_by = $2 WHERE id = $1",
+      [session.id, next.sessionId],
+    );
+    await client.query("COMMIT");
+    return { account: { id: session.account_id, email: session.email },
+      accessToken: next.accessToken, refreshToken: next.refreshToken,
+      tokenType: next.tokenType, expiresIn: next.expiresIn };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    requestLogError(error);
+    return reply.code(503).send({ error: "REFRESH_UNAVAILABLE" });
+  } finally { client.release(); }
+});
+
+app.post("/v1/auth/logout", async (request, reply) => {
+  const parsedBody = refreshSchema.safeParse(request.body);
+  if (!parsedBody.success) return reply.code(400).send({ error: "INVALID_REFRESH_TOKEN" });
+  await pool.query(
+    "UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE refresh_token_hash = $1",
+    [tokenHash(parsedBody.data.refreshToken)],
+  );
+  return reply.code(204).send();
+});
+
+app.get("/v1/me", async (request, reply) => {
+  const claims = await authenticate(request);
+  if (!claims) return reply.code(401).send({ error: "UNAUTHORIZED" });
+  const result = await pool.query<{ id: string; email: string; status: string; country_code: string | null }>(
+    "SELECT id, email, status, country_code FROM accounts WHERE id = $1", [claims.sub],
+  );
+  const account = result.rows[0];
+  if (!account || account.status !== "active") return reply.code(401).send({ error: "UNAUTHORIZED" });
+  return { account: { id: account.id, email: account.email, countryCode: account.country_code } };
 });
 
 app.get("/v1/servers", async (_request, reply) => {
   try {
     const result = await pool.query<{
-      id: string;
-      code: string;
-      display_name: string;
-      country_code: string;
-      city: string;
-      endpoint_host: string;
-      endpoint_port: number;
-      public_key: string;
-      active_peers: number;
-      capacity_peers: number;
+      id: string; code: string; display_name: string; country_code: string; city: string;
+      endpoint_host: string; endpoint_port: number; public_key: string; active_peers: number; capacity_peers: number;
     }>(
       `SELECT id, code, display_name, country_code, city, endpoint_host,
               endpoint_port, public_key, active_peers, capacity_peers
-         FROM gateways
-        WHERE status = 'online' AND active_peers < capacity_peers
+         FROM gateways WHERE status = 'online' AND active_peers < capacity_peers
         ORDER BY country_code ASC,
-                 (active_peers::numeric / capacity_peers::numeric) ASC,
-                 display_name ASC`,
+                 (active_peers::numeric / capacity_peers::numeric) ASC, display_name ASC`,
     );
-
-    return {
-      servers: result.rows.map((row) => ({
-        id: row.id,
-        code: row.code,
-        name: row.display_name,
-        countryCode: row.country_code,
-        city: row.city,
-        endpoint: `${row.endpoint_host}:${row.endpoint_port}`,
-        publicKey: row.public_key,
-        loadPercent: Math.min(100, Math.round((row.active_peers / row.capacity_peers) * 100)),
-      })),
-    };
+    return { servers: result.rows.map((row) => ({
+      id: row.id, code: row.code, name: row.display_name, countryCode: row.country_code,
+      city: row.city, endpoint: `${row.endpoint_host}:${row.endpoint_port}`, publicKey: row.public_key,
+      loadPercent: Math.min(100, Math.round((row.active_peers / row.capacity_peers) * 100)),
+    })) };
   } catch (error) {
     requestLogError(error);
     return reply.code(503).send({ error: "SERVER_CATALOG_UNAVAILABLE" });
@@ -96,35 +251,21 @@ app.get("/v1/servers", async (_request, reply) => {
 });
 
 function requestLogError(error: unknown) {
-  // Database error messages can include internal details; log only a stable code/name.
   const code = typeof error === "object" && error !== null && "code" in error
-    ? String((error as { code: unknown }).code)
-    : "UNKNOWN";
-  app.log.error({ databaseErrorCode: code }, "Server catalog query failed");
+    ? String((error as { code: unknown }).code) : "UNKNOWN";
+  app.log.error({ databaseErrorCode: code }, "Database operation failed");
 }
-
-app.setNotFoundHandler((_request, reply) => {
-  return reply.code(404).send({ error: "NOT_FOUND" });
-});
-
+app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: "NOT_FOUND" }));
 app.setErrorHandler((error, _request, reply) => {
-  if (error.statusCode === 429) {
-    return reply.code(429).send({ error: "RATE_LIMITED" });
-  }
+  if (error.statusCode === 429) return reply.code(429).send({ error: "RATE_LIMITED" });
   app.log.error({ errorCode: error.code ?? "UNKNOWN" }, "Unhandled request error");
   return reply.code(500).send({ error: "INTERNAL_ERROR" });
 });
-
-const close = async () => {
-  await app.close();
-  await pool.end();
-};
+const close = async () => { await app.close(); await pool.end(); };
 process.once("SIGINT", () => void close().then(() => process.exit(0)));
 process.once("SIGTERM", () => void close().then(() => process.exit(0)));
-
-try {
-  await app.listen({ host: env.HOST, port: env.PORT });
-} catch (error) {
+try { await app.listen({ host: env.HOST, port: env.PORT }); }
+catch (error) {
   app.log.error({ errorCode: error instanceof Error ? error.name : "UNKNOWN" }, "Could not start control plane");
   await close();
   process.exit(1);
