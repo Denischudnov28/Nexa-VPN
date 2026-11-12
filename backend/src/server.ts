@@ -264,27 +264,30 @@ app.post("/v1/devices", async (request, reply) => {
   if (!parsedBody.success || !isWireGuardPublicKey(parsedBody.data?.publicKey ?? "")) {
     return reply.code(400).send({ error: "INVALID_DEVICE" });
   }
-  const account = await pool.query("SELECT 1 FROM accounts WHERE id = $1 AND status = 'active'", [claims.sub]);
-  if (!account.rowCount) return reply.code(401).send({ error: "UNAUTHORIZED" });
   const { platform, label, publicKey } = parsedBody.data;
+  const client = await pool.connect();
   try {
-    const result = await pool.query<{ id: string; status: string; created_at: Date }>(
-      `INSERT INTO devices(account_id, platform, device_label, public_key, status)
-       VALUES ($1, $2, $3, $4, 'pending')
-       RETURNING id, status, created_at`,
-      [claims.sub, platform, label ?? null, publicKey],
-    );
-    return reply.code(201).send({
-      device: { id: result.rows[0].id, platform, label: label ?? null,
-        status: result.rows[0].status, createdAt: result.rows[0].created_at },
-    });
+    await client.query("BEGIN");
+    const account = await client.query("SELECT id FROM accounts WHERE id = $1 AND status = 'active' FOR UPDATE", [claims.sub]);
+    if (!account.rowCount) {
+      await client.query("ROLLBACK");
+      return reply.code(401).send({ error: "UNAUTHORIZED" });
+    }
+    const count = await client.query<{ count: string }>("SELECT count(*)::text AS count FROM devices WHERE account_id = $1 AND status <> 'revoked'", [claims.sub]);
+    if (Number(count.rows[0]?.count ?? 0) >= 5) {
+      await client.query("ROLLBACK");
+      return reply.code(409).send({ error: "DEVICE_LIMIT_REACHED" });
+    }
+    const result = await client.query<{ id: string; status: string; created_at: Date }>("INSERT INTO devices(account_id, platform, device_label, public_key, status) VALUES ($1, $2, $3, $4, 'pending') RETURNING id, status, created_at", [claims.sub, platform, label ?? null, publicKey]);
+    await client.query("COMMIT");
+    return reply.code(201).send({ device: { id: result.rows[0].id, platform, label: label ?? null, status: result.rows[0].status, createdAt: result.rows[0].created_at } });
   } catch (error) {
-    const code = typeof error === "object" && error !== null && "code" in error
-      ? String((error as { code: unknown }).code) : "UNKNOWN";
+    await client.query("ROLLBACK");
+    const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "UNKNOWN";
     if (code === "23505") return reply.code(409).send({ error: "DEVICE_KEY_ALREADY_REGISTERED" });
     requestLogError(error);
     return reply.code(503).send({ error: "DEVICE_REGISTRATION_UNAVAILABLE" });
-  }
+  } finally { client.release(); }
 });
 
 app.delete("/v1/devices/:deviceId", async (request, reply) => {
@@ -297,7 +300,7 @@ app.delete("/v1/devices/:deviceId", async (request, reply) => {
     await client.query("BEGIN");
     const result = await client.query<{ id: string }>(
       `UPDATE devices SET status = 'revoked'
-        WHERE id = $1 AND account_id = $2 AND status <> 'revoked'
+        WHERE id = $1 AND account_id = $2 AND status <> 'revoked' AND EXISTS (SELECT 1 FROM accounts WHERE id = $2 AND status = 'active')
         RETURNING id`, [params.data.deviceId, claims.sub],
     );
     if (!result.rowCount) {
