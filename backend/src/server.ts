@@ -176,9 +176,13 @@ app.post("/v1/gateway-agent/jobs/claim", async (request, reply) => {
        ),
        allocation AS (
          SELECT job.device_id, job.gateway_id,
-                set_masklen(network(g.ipv4_cidr) + n.host_offset, 32)::inet AS ip
+                set_masklen(network(g.ipv4_cidr)::inet + n.host_offset, 32)::inet AS ip
            FROM job JOIN gateways g ON g.id = job.gateway_id
-           CROSS JOIN LATERAL generate_series(2, g.capacity_peers + 2) AS n(host_offset)
+           CROSS JOIN LATERAL generate_series(
+             2,
+             LEAST(g.capacity_peers + 2,
+               ((1::bigint << (32 - masklen(g.ipv4_cidr))) - 2)::integer)
+           ) AS n(host_offset)
           WHERE job.action = 'provision_peer' AND g.ipv4_cidr IS NOT NULL
             AND NOT EXISTS (
               SELECT 1 FROM gateway_peers p
