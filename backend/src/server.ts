@@ -416,14 +416,14 @@ app.get("/v1/devices", async (request, reply) => {
   const account = await pool.query("SELECT 1 FROM accounts WHERE id = $1 AND status = 'active'", [claims.sub]);
   if (!account.rowCount) return reply.code(401).send({ error: "UNAUTHORIZED" });
   const result = await pool.query<{
-    id: string; platform: string; device_label: string | null; status: string;
+    id: string; platform: string; device_label: string | null; public_key: string; status: string;
     created_at: Date; last_seen_at: Date | null;
   }>(
-    `SELECT id, platform, device_label, status, created_at, last_seen_at
+    `SELECT id, platform, device_label, public_key, status, created_at, last_seen_at
        FROM devices WHERE account_id = $1 ORDER BY created_at DESC`, [claims.sub],
   );
   return { devices: result.rows.map((device) => ({
-    id: device.id, platform: device.platform, label: device.device_label,
+    id: device.id, platform: device.platform, label: device.device_label, publicKey: device.public_key,
     status: device.status, createdAt: device.created_at, lastSeenAt: device.last_seen_at,
   })) };
 });
