@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: NEXA VPN Control Plane API
-  version: 0.1.0
-  description: Initial API contract. Not deployed. All routes require HTTPS.
+  version: 0.2.0
+  description: Initial account authentication and gateway catalog contract. Not yet deployed.
 servers:
   - url: https://api.example.invalid
     description: Placeholder only; replace after deployment.
@@ -12,24 +12,99 @@ paths:
   /v1/health:
     get:
       security: []
-      summary: Liveness check
+      summary: Liveness and database readiness
       responses:
-        '200':
-          description: Service is alive
+        '200': { description: Service and database are ready }
+        '503': { description: Service is degraded }
+  /v1/auth/register:
+    post:
+      security: []
+      summary: Create an account
+      description: Beta endpoint. Email verification and account recovery are not implemented yet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                password: { type: string, minLength: 12, maxLength: 128 }
+                countryCode: { type: string, pattern: '^[A-Za-z]{2}$' }
+      responses:
+        '201': { description: Account created with access and refresh tokens }
+        '400': { description: Invalid registration payload }
+        '409': { description: Account already exists }
+        '429': { description: Rate limit exceeded }
+  /v1/auth/login:
+    post:
+      security: []
+      summary: Sign in with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200': { description: Account and token pair }
+        '401': { description: Invalid email or password }
+        '429': { description: Rate limit exceeded }
+  /v1/auth/refresh:
+    post:
+      security: []
+      summary: Rotate a refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string, minLength: 40 }
+      responses:
+        '200': { description: New access and refresh tokens }
+        '401': { description: Invalid or reused refresh token }
+  /v1/auth/logout:
+    post:
+      security: []
+      summary: Revoke a refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '204': { description: Session revoked }
   /v1/me:
     get:
-      summary: Current account and entitlement summary
+      summary: Current account
       responses:
-        '200':
-          description: Account summary
-        '401':
-          description: Missing or invalid access token
+        '200': { description: Account summary }
+        '401': { description: Missing or invalid access token }
+  /v1/servers:
+    get:
+      security: []
+      summary: List healthy gateways
+      responses:
+        '200': { description: Public server catalog }
+        '503': { description: Server catalog unavailable }
   /v1/devices:
     get:
       summary: List devices belonging to the current account
       responses:
-        '200':
-          description: Device list
+        '200': { description: Device list }
+        '401': { description: Missing or invalid access token }
     post:
       summary: Register a device public key
       description: Client generates the private key locally. Never send private key material.
@@ -41,31 +116,13 @@ paths:
               type: object
               required: [platform, publicKey]
               properties:
-                platform:
-                  type: string
-                  enum: [android, ios]
-                label:
-                  type: string
-                  maxLength: 80
-                publicKey:
-                  type: string
-                  minLength: 43
-                  maxLength: 44
+                platform: { type: string, enum: [android, ios] }
+                label: { type: string, maxLength: 80 }
+                publicKey: { type: string, minLength: 43, maxLength: 44 }
       responses:
-        '201':
-          description: Device registered
-        '400':
-          description: Invalid request
-        '401':
-          description: Missing or invalid access token
-  /v1/servers:
-    get:
-      summary: List healthy gateways available to the current subscription
-      responses:
-        '200':
-          description: Available server catalog
-        '401':
-          description: Missing or invalid access token
+        '201': { description: Device registered }
+        '400': { description: Invalid request }
+        '401': { description: Missing or invalid access token }
   /v1/devices/{deviceId}/wireguard-profile:
     post:
       summary: Allocate a gateway peer and issue a device-specific profile
@@ -73,16 +130,11 @@ paths:
         - in: path
           name: deviceId
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
-        '200':
-          description: Device-specific WireGuard profile; never cache or log response
-        '403':
-          description: Subscription is not entitled or device is not owned by account
-        '409':
-          description: No gateway capacity available
+        '200': { description: Device-specific WireGuard profile; never cache or log response }
+        '403': { description: Subscription is not entitled or device is not owned by account }
+        '409': { description: No gateway capacity available }
   /v1/devices/{deviceId}:
     delete:
       summary: Revoke a device and remove its gateway peer
@@ -90,22 +142,16 @@ paths:
         - in: path
           name: deviceId
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
-        '204':
-          description: Device revoked
-        '404':
-          description: Device not found for this account
+        '204': { description: Device revoked }
+        '404': { description: Device not found for this account }
   /v1/me/subscription:
     get:
       summary: Read current subscription entitlement
       responses:
-        '200':
-          description: Subscription status and period
-        '401':
-          description: Missing or invalid access token
+        '200': { description: Subscription status and period }
+        '401': { description: Missing or invalid access token }
 components:
   securitySchemes:
     bearerAuth:
