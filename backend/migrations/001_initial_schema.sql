@@ -3,6 +3,7 @@
 -- No raw browsing history or DNS query contents are stored in this schema.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS citext;
 
 CREATE TABLE IF NOT EXISTS accounts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -104,5 +105,3 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 CREATE INDEX IF NOT EXISTS audit_events_created_at_idx ON audit_events(created_at DESC);
 
--- CITEXT is used for case-insensitive email uniqueness.
-CREATE EXTENSION IF NOT EXISTS citext;
