@@ -50,6 +50,7 @@ jobs:
           psql -h 127.0.0.1 -U nexa -d nexa_test -v ON_ERROR_STOP=1 -f backend/migrations/003_gateway_jobs.sql
           psql -h 127.0.0.1 -U nexa -d nexa_test -v ON_ERROR_STOP=1 -f backend/migrations/004_gateway_agent_auth.sql
           psql -h 127.0.0.1 -U nexa -d nexa_test -v ON_ERROR_STOP=1 -f backend/migrations/005_gateway_ip_pools.sql
+          psql -h 127.0.0.1 -U nexa -d nexa_test -v ON_ERROR_STOP=1 -f backend/migrations/006_ipv4_pool_constraints.sql
 
   gateway-agent:
     runs-on: ubuntu-latest
