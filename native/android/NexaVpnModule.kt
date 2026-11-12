@@ -32,6 +32,58 @@ class NexaVpnModule(private val context: ReactApplicationContext) :
     override fun getName() = "NexaVpnModule"
 
     @ReactMethod
+    fun getOrCreateKeyPair(promise: Promise) {
+        executor.execute {
+            try {
+                val prefs = context.getSharedPreferences("nexa_vpn_keys", android.content.Context.MODE_PRIVATE)
+                val encrypted = prefs.getString("keypair", null)
+                val pairJson = if (encrypted != null) decryptKeypair(encrypted) else {
+                    val pair = KeyPair()
+                    val json = JSONObject().put("privateKey", pair.privateKey.toBase64())
+                        .put("publicKey", pair.publicKey.toBase64()).toString()
+                    prefs.edit().putString("keypair", encryptKeypair(json)).apply()
+                    json
+                }
+                val json = JSONObject(pairJson)
+                val result = Arguments.createMap().apply {
+                    putString("privateKey", json.getString("privateKey"))
+                    putString("publicKey", json.getString("publicKey"))
+                }
+                promise.resolve(result)
+            } catch (error: Exception) {
+                promise.reject("E_KEYPAIR", "Could not securely create or load the device key.", error)
+            }
+        }
+    }
+
+    private fun secretKey(): SecretKey {
+        val store = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getKey("nexa-vpn-aes", null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(KeyGenParameterSpec.Builder("nexa-vpn-aes",
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setRandomizedEncryptionRequired(true).build())
+        return generator.generateKey()
+    }
+
+    private fun encryptKeypair(value: String): String {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+        val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+        return Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
+    }
+
+    private fun decryptKeypair(value: String): String {
+        val all = Base64.decode(value, Base64.NO_WRAP)
+        val iv = all.copyOfRange(0, 12)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, iv))
+        return String(cipher.doFinal(all.copyOfRange(12, all.size)), Charsets.UTF_8)
+    }
+
+    @ReactMethod
     fun prepare(promise: Promise) {
         val intent = controller.authorizationIntent()
         if (intent == null) { promise.resolve(true); return }
