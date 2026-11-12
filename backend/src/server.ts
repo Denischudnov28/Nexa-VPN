@@ -47,6 +47,17 @@ const passwordSchema = z.string().min(12).max(128);
 const registerSchema = z.object({ email: emailSchema, password: passwordSchema, countryCode: z.string().regex(/^[A-Za-z]{2}$/).optional() });
 const loginSchema = z.object({ email: emailSchema, password: z.string().min(1).max(128) });
 const refreshSchema = z.object({ refreshToken: z.string().min(40).max(200) });
+const deviceCreateSchema = z.object({
+  platform: z.enum(["android", "ios"]),
+  label: z.string().trim().min(1).max(80).optional(),
+  publicKey: z.string().length(44).regex(/^[A-Za-z0-9+/]{43}=$/),
+});
+function isWireGuardPublicKey(value: string): boolean {
+  try {
+    const decoded = Buffer.from(value, "base64");
+    return decoded.length === 32 && decoded.toString("base64") === value;
+  } catch { return false; }
+}
 
 function b64url(value: Buffer | string): string {
   return Buffer.from(value).toString("base64url");
@@ -225,6 +236,86 @@ app.get("/v1/me", async (request, reply) => {
   const account = result.rows[0];
   if (!account || account.status !== "active") return reply.code(401).send({ error: "UNAUTHORIZED" });
   return { account: { id: account.id, email: account.email, countryCode: account.country_code } };
+});
+
+
+app.get("/v1/devices", async (request, reply) => {
+  const claims = await authenticate(request);
+  if (!claims) return reply.code(401).send({ error: "UNAUTHORIZED" });
+  const account = await pool.query("SELECT 1 FROM accounts WHERE id = $1 AND status = 'active'", [claims.sub]);
+  if (!account.rowCount) return reply.code(401).send({ error: "UNAUTHORIZED" });
+  const result = await pool.query<{
+    id: string; platform: string; device_label: string | null; status: string;
+    created_at: Date; last_seen_at: Date | null;
+  }>(
+    `SELECT id, platform, device_label, status, created_at, last_seen_at
+       FROM devices WHERE account_id = $1 ORDER BY created_at DESC`, [claims.sub],
+  );
+  return { devices: result.rows.map((device) => ({
+    id: device.id, platform: device.platform, label: device.device_label,
+    status: device.status, createdAt: device.created_at, lastSeenAt: device.last_seen_at,
+  })) };
+});
+
+app.post("/v1/devices", async (request, reply) => {
+  const claims = await authenticate(request);
+  if (!claims) return reply.code(401).send({ error: "UNAUTHORIZED" });
+  const parsedBody = deviceCreateSchema.safeParse(request.body);
+  if (!parsedBody.success || !isWireGuardPublicKey(parsedBody.data?.publicKey ?? "")) {
+    return reply.code(400).send({ error: "INVALID_DEVICE" });
+  }
+  const account = await pool.query("SELECT 1 FROM accounts WHERE id = $1 AND status = 'active'", [claims.sub]);
+  if (!account.rowCount) return reply.code(401).send({ error: "UNAUTHORIZED" });
+  const { platform, label, publicKey } = parsedBody.data;
+  try {
+    const result = await pool.query<{ id: string; status: string; created_at: Date }>(
+      `INSERT INTO devices(account_id, platform, device_label, public_key, status)
+       VALUES ($1, $2, $3, $4, 'pending')
+       RETURNING id, status, created_at`,
+      [claims.sub, platform, label ?? null, publicKey],
+    );
+    return reply.code(201).send({
+      device: { id: result.rows[0].id, platform, label: label ?? null,
+        status: result.rows[0].status, createdAt: result.rows[0].created_at },
+    });
+  } catch (error) {
+    const code = typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code: unknown }).code) : "UNKNOWN";
+    if (code === "23505") return reply.code(409).send({ error: "DEVICE_KEY_ALREADY_REGISTERED" });
+    requestLogError(error);
+    return reply.code(503).send({ error: "DEVICE_REGISTRATION_UNAVAILABLE" });
+  }
+});
+
+app.delete("/v1/devices/:deviceId", async (request, reply) => {
+  const claims = await authenticate(request);
+  if (!claims) return reply.code(401).send({ error: "UNAUTHORIZED" });
+  const params = z.object({ deviceId: z.string().uuid() }).safeParse(request.params);
+  if (!params.success) return reply.code(400).send({ error: "INVALID_DEVICE_ID" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query<{ id: string }>(
+      `UPDATE devices SET status = 'revoked'
+        WHERE id = $1 AND account_id = $2 AND status <> 'revoked'
+        RETURNING id`, [params.data.deviceId, claims.sub],
+    );
+    if (!result.rowCount) {
+      await client.query("ROLLBACK");
+      return reply.code(404).send({ error: "DEVICE_NOT_FOUND" });
+    }
+    // Keep gateway peers in revoking state until the private gateway agent confirms removal.
+    await client.query(
+      `UPDATE gateway_peers SET status = 'revoking'
+        WHERE device_id = $1 AND status = 'active'`, [params.data.deviceId],
+    );
+    await client.query("COMMIT");
+    return reply.code(204).send();
+  } catch (error) {
+    await client.query("ROLLBACK");
+    requestLogError(error);
+    return reply.code(503).send({ error: "DEVICE_REVOCATION_UNAVAILABLE" });
+  } finally { client.release(); }
 });
 
 app.get("/v1/servers", async (_request, reply) => {
