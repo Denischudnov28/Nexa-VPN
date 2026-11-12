@@ -312,6 +312,15 @@ app.delete("/v1/devices/:deviceId", async (request, reply) => {
       `UPDATE gateway_peers SET status = 'revoking'
         WHERE device_id = $1 AND status = 'active'`, [params.data.deviceId],
     );
+    await client.query(
+      `INSERT INTO gateway_jobs(device_id, gateway_id, action, status)
+       SELECT device_id, gateway_id, 'revoke_peer', 'queued'
+         FROM gateway_peers
+        WHERE device_id = $1 AND status = 'revoking'
+       ON CONFLICT (device_id, gateway_id, action)
+         WHERE status IN ('queued', 'leased') DO NOTHING`,
+      [params.data.deviceId],
+    );
     await client.query("COMMIT");
     return reply.code(204).send();
   } catch (error) {
@@ -321,6 +330,104 @@ app.delete("/v1/devices/:deviceId", async (request, reply) => {
   } finally { client.release(); }
 });
 
+
+
+app.post("/v1/devices/:deviceId/provisioning-requests", async (request, reply) => {
+  const claims = await authenticate(request);
+  if (!claims) return reply.code(401).send({ error: "UNAUTHORIZED" });
+  const params = z.object({ deviceId: z.string().uuid() }).safeParse(request.params);
+  const body = z.object({ gatewayId: z.string().uuid().optional() }).safeParse(request.body ?? {});
+  if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_PROVISIONING_REQUEST" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const deviceResult = await client.query<{ id: string; status: string }>(
+      `SELECT d.id, d.status FROM devices d
+         JOIN accounts a ON a.id = d.account_id
+        WHERE d.id = $1 AND d.account_id = $2 AND a.status = 'active'
+          AND d.status IN ('pending', 'active')
+        FOR UPDATE OF d`,
+      [params.data.deviceId, claims.sub],
+    );
+    if (!deviceResult.rowCount) {
+      await client.query("ROLLBACK");
+      return reply.code(404).send({ error: "DEVICE_NOT_FOUND" });
+    }
+
+    const entitlement = await client.query(
+      `SELECT 1 FROM subscriptions
+        WHERE account_id = $1
+          AND status IN ('trialing', 'active', 'grace_period')
+          AND (current_period_end IS NULL OR current_period_end > now())
+        LIMIT 1`,
+      [claims.sub],
+    );
+    if (!entitlement.rowCount) {
+      await client.query("ROLLBACK");
+      return reply.code(403).send({ error: "SUBSCRIPTION_REQUIRED" });
+    }
+
+    const existing = await client.query<{ id: string; status: string }>(
+      `SELECT id, status FROM gateway_jobs
+        WHERE device_id = $1 AND action = 'provision_peer'
+          AND status IN ('queued', 'leased')
+        ORDER BY created_at DESC LIMIT 1`,
+      [params.data.deviceId],
+    );
+    if (existing.rowCount) {
+      await client.query("COMMIT");
+      return reply.code(202).send({ requestId: existing.rows[0].id, status: existing.rows[0].status });
+    }
+
+    const activePeer = await client.query(
+      "SELECT 1 FROM gateway_peers WHERE device_id = $1 AND status = 'active' LIMIT 1",
+      [params.data.deviceId],
+    );
+    if (activePeer.rowCount) {
+      await client.query("ROLLBACK");
+      return reply.code(409).send({ error: "DEVICE_ALREADY_PROVISIONED" });
+    }
+
+    const gateway = await client.query<{ id: string }>(
+      `SELECT g.id FROM gateways g
+        WHERE g.status = 'online'
+          AND ($1::uuid IS NULL OR g.id = $1)
+          AND g.active_peers + (
+            SELECT count(*)::int FROM gateway_jobs j
+             WHERE j.gateway_id = g.id AND j.action = 'provision_peer'
+               AND j.status IN ('queued', 'leased')
+          ) < g.capacity_peers
+        ORDER BY
+          ((g.active_peers + (
+            SELECT count(*)::int FROM gateway_jobs j
+             WHERE j.gateway_id = g.id AND j.action = 'provision_peer'
+               AND j.status IN ('queued', 'leased')
+          ))::numeric / g.capacity_peers::numeric) ASC,
+          g.country_code ASC, g.display_name ASC
+        FOR UPDATE OF g SKIP LOCKED
+        LIMIT 1`,
+      [body.data.gatewayId ?? null],
+    );
+    if (!gateway.rowCount) {
+      await client.query("ROLLBACK");
+      return reply.code(409).send({ error: "NO_GATEWAY_CAPACITY" });
+    }
+
+    const inserted = await client.query<{ id: string }>(
+      `INSERT INTO gateway_jobs(device_id, gateway_id, action, status)
+       VALUES ($1, $2, 'provision_peer', 'queued')
+       RETURNING id`,
+      [params.data.deviceId, gateway.rows[0].id],
+    );
+    await client.query("COMMIT");
+    return reply.code(202).send({ requestId: inserted.rows[0].id, status: "queued" });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    requestLogError(error);
+    return reply.code(503).send({ error: "PROVISIONING_REQUEST_UNAVAILABLE" });
+  } finally { client.release(); }
+});
 
 app.get("/v1/me/subscription", async (request, reply) => {
   const claims = await authenticate(request);
