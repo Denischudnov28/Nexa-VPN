@@ -28,6 +28,41 @@ final class NexaVpnModule: RCTEventEmitter {
         if let observer { NotificationCenter.default.removeObserver(observer); self.observer = nil }
     }
 
+    @objc func getOrCreateKeyPair(_ resolve: @escaping RCTPromiseResolveBlock,
+                                 rejecter reject: @escaping RCTPromiseRejectBlock) {
+        do {
+            let privateKey: Curve25519.KeyAgreement.PrivateKey
+            if let stored = keychainRead() {
+                privateKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: stored)
+            } else {
+                privateKey = Curve25519.KeyAgreement.PrivateKey()
+                try keychainWrite(privateKey.rawRepresentation)
+            }
+            resolve(["privateKey": privateKey.rawRepresentation.base64EncodedString(),
+                     "publicKey": privateKey.publicKey.rawRepresentation.base64EncodedString()])
+        } catch { reject("E_KEYPAIR", "Could not securely create or load the device key.", error) }
+    }
+
+    private func keychainRead() -> Data? {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "app.nexa.vpn", kSecAttrAccount as String: "wireguard-private-key",
+            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? Data
+    }
+
+    private func keychainWrite(_ data: Data) throws {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "app.nexa.vpn", kSecAttrAccount as String: "wireguard-private-key"]
+        SecItemDelete(query as CFDictionary)
+        var attributes = query
+        attributes[kSecValueData as String] = data
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let status = SecItemAdd(attributes as CFDictionary, nil)
+        guard status == errSecSuccess else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+    }
+
     @objc func prepare(_ resolve: @escaping RCTPromiseResolveBlock,
                        rejecter reject: @escaping RCTPromiseRejectBlock) {
         loadManager { [weak self] loaded, error in
