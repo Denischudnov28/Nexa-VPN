@@ -19,5 +19,18 @@ export const nexaApi = {
     request<SessionResponse>(base, "/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   register: (base: string, email: string, password: string) =>
     request<SessionResponse>(base, "/v1/auth/register", { method: "POST", body: JSON.stringify({ email, password }) }),
-  servers: (base: string) => request<{ servers: NexaServer[] }>(base, "/v1/servers"),
+  servers: (base: string, token?: string) => request<{ servers: NexaServer[] }>(base, "/v1/servers", {}, token),
+  createDevice: (base: string, token: string, platform: "android" | "ios", publicKey: string, label: string) =>
+    request<{ device: { id: string; status: string } }>(base, "/v1/devices", {
+      method: "POST", body: JSON.stringify({ platform, publicKey, label }),
+    }, token),
+  provisionDevice: (base: string, token: string, deviceId: string, gatewayId: string) =>
+    request<{ requestId: string; status: string }>(base, `/v1/devices/${deviceId}/provisioning-requests`, {
+      method: "POST", body: JSON.stringify({ gatewayId }),
+    }, token),
+  deviceStatus: (base: string, token: string, deviceId: string) =>
+    request<{ requestId: string | null; jobStatus: string | null; deviceStatus: string | null;
+      profile: null | { address: string; endpoint: string; serverPublicKey: string; serverName: string; dns: string[] } }>(
+      base, `/v1/devices/${deviceId}/provisioning-status`, {}, token),
+
 };
