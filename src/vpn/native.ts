@@ -4,7 +4,7 @@ export type NativeVpnState =
   | "disconnected" | "connecting" | "connected" | "disconnecting"
   | "reasserting" | "up" | "down" | "error";
 
-type NativeVpnModule = {
+export type WireGuardKeyPair = { privateKey: string; publicKey: string };\ntype NativeVpnModule = {\n  getOrCreateKeyPair(): Promise<WireGuardKeyPair>;
   prepare(): Promise<boolean>;
   connect(config: string): Promise<NativeVpnState>;
   disconnect(): Promise<NativeVpnState>;
@@ -21,7 +21,7 @@ function moduleOrThrow(): NativeVpnModule {
   return nativeModule;
 }
 
-export const nexaNativeVpn = {
+export const nexaNativeVpn = {\n  getOrCreateKeyPair: () => moduleOrThrow().getOrCreateKeyPair(),
   prepare: () => moduleOrThrow().prepare(),
   connect: (wgQuickConfig: string) => moduleOrThrow().connect(wgQuickConfig),
   disconnect: () => moduleOrThrow().disconnect(),
