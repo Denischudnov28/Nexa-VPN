@@ -70,13 +70,34 @@ func pollOnce(ctx context.Context, client *http.Client, cfg config) error {
 	if err := json.NewDecoder(res.Body).Decode(&result); err != nil { return err }
 	if result.Job == nil { return nil }
 	ok := false
-	if result.Job.Action == "revoke_peer" {
+	switch result.Job.Action {
+	case "revoke_peer":
 		ok, err = removePeer(cfg.Interface, result.Job.PublicKey)
-	} else {
+	case "provision_peer":
+		ok, err = provisionPeer(cfg.Interface, result.Job.PublicKey, result.Job.AssignedIPv4)
+	default:
 		err = errors.New("unsupported job action")
 	}
 	if err != nil { log.Printf("job %s failed: %v", result.Job.ID, err) }
 	return complete(ctx, client, cfg, result.Job.ID, ok)
+}
+
+func provisionPeer(iface, publicKey, assignedIPv4 string) (bool, error) {
+	if len(publicKey) != 44 || !strings.HasSuffix(publicKey, "=") {
+		return false, errors.New("invalid WireGuard public key received")
+	}
+	if strings.ContainsAny(assignedIPv4, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ/:") || assignedIPv4 == "" {
+		return false, errors.New("invalid assigned IPv4 address received")
+	}
+	if output, err := exec.Command("wg", "set", iface, "peer", publicKey, "allowed-ips", assignedIPv4+"/32").CombinedOutput(); err != nil {
+		return false, fmt.Errorf("add WireGuard peer: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+	// Persist the running interface so peers survive a gateway restart.
+	if output, err := exec.Command("wg-quick", "save", iface).CombinedOutput(); err != nil {
+		_, _ = exec.Command("wg", "set", iface, "peer", publicKey, "remove").CombinedOutput()
+		return false, fmt.Errorf("persist WireGuard peer: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+	return true, nil
 }
 
 func removePeer(iface, publicKey string) (bool, error) {
@@ -91,6 +112,9 @@ func removePeer(iface, publicKey string) (bool, error) {
 	cmd := exec.Command("wg", "set", iface, "peer", publicKey, "remove")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("remove WireGuard peer: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+	if output, err := exec.Command("wg-quick", "save", iface).CombinedOutput(); err != nil {
+		return false, fmt.Errorf("persist peer removal: %w (%s)", err, strings.TrimSpace(string(output)))
 	}
 	return true, nil
 }
