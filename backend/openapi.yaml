@@ -150,7 +150,7 @@ paths:
     get:
       summary: Read current subscription entitlement
       responses:
-        '200': { description: Subscription status and period }
+        '200': { description: Current subscription status and entitlement flag; null when no active entitlement }
         '401': { description: Missing or invalid access token }
 components:
   securitySchemes:
