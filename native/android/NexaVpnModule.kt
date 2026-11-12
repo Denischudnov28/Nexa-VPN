@@ -37,7 +37,7 @@ class NexaVpnModule(private val context: ReactApplicationContext) :
             try {
                 val prefs = context.getSharedPreferences("nexa_vpn_keys", android.content.Context.MODE_PRIVATE)
                 val encrypted = prefs.getString("keypair", null)
-                val pairJson = if (encrypted != null) decryptKeypair(encrypted) else {
+                val pairJson = encrypted?.let { runCatching { decryptKeypair(it) }.getOrNull() } ?: run {
                     val pair = KeyPair()
                     val json = JSONObject().put("privateKey", pair.privateKey.toBase64())
                         .put("publicKey", pair.publicKey.toBase64()).toString()
