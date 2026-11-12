@@ -155,23 +155,69 @@ app.post("/v1/gateway-agent/jobs/claim", async (request, reply) => {
       await client.query("ROLLBACK");
       return reply.code(404).send({ error: "GATEWAY_NOT_AVAILABLE" });
     }
-    const claimed = await client.query<{ id: string; action: string; device_id: string; public_key: string }>(
+    const claimed = await client.query<{
+      id: string; action: string; device_id: string; public_key: string; assigned_ipv4: string | null;
+    }>(
       `WITH candidate AS (
          SELECT j.id FROM gateway_jobs j
-          WHERE j.gateway_id = $1 AND j.action = 'revoke_peer'
+          WHERE j.gateway_id = $1
             AND (j.status = 'queued' OR (j.status = 'leased' AND j.lease_expires_at < now()))
             AND j.available_at <= now()
-          ORDER BY j.created_at
+          ORDER BY CASE j.action WHEN 'revoke_peer' THEN 0 ELSE 1 END, j.created_at
           FOR UPDATE SKIP LOCKED LIMIT 1
+       ),
+       job AS (
+         UPDATE gateway_jobs j
+            SET status = 'leased', lease_owner = $2, lease_expires_at = now() + interval '60 seconds',
+                attempt_count = attempt_count + 1, updated_at = now()
+           FROM candidate c
+          WHERE j.id = c.id
+          RETURNING j.id, j.action, j.device_id, j.gateway_id
+       ),
+       allocation AS (
+         SELECT job.device_id, job.gateway_id,
+                set_masklen(network(g.ipv4_cidr) + n.host_offset, 32)::inet AS ip
+           FROM job JOIN gateways g ON g.id = job.gateway_id
+           CROSS JOIN LATERAL generate_series(2, g.capacity_peers + 2) AS n(host_offset)
+          WHERE job.action = 'provision_peer' AND g.ipv4_cidr IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM gateway_peers p
+               WHERE p.gateway_id = job.gateway_id
+                 AND p.assigned_ipv4 = set_masklen(network(g.ipv4_cidr) + n.host_offset, 32)::inet
+                 AND p.status IN ('provisioning','active','revoking')
+            )
+          ORDER BY n.host_offset LIMIT 1
+       ),
+       peer AS (
+         INSERT INTO gateway_peers(device_id, gateway_id, assigned_ipv4, status)
+         SELECT device_id, gateway_id, ip, 'provisioning' FROM allocation
+         ON CONFLICT (device_id, gateway_id) DO UPDATE
+           SET assigned_ipv4 = EXCLUDED.assigned_ipv4, status = 'provisioning', revoked_at = NULL
+         RETURNING device_id, gateway_id, assigned_ipv4
        )
-       UPDATE gateway_jobs j
-          SET status = 'leased', lease_owner = $2, lease_expires_at = now() + interval '60 seconds',
-              attempt_count = attempt_count + 1, updated_at = now()
-         FROM candidate c, devices d
-        WHERE j.id = c.id AND d.id = j.device_id
-       RETURNING j.id, j.action, j.device_id, d.public_key`,
+       SELECT j.id, j.action, j.device_id, d.public_key,
+              p.assigned_ipv4::text AS assigned_ipv4
+         FROM job j JOIN devices d ON d.id = j.device_id
+         LEFT JOIN peer p ON p.device_id = j.device_id AND p.gateway_id = j.gateway_id
+         LEFT JOIN gateway_peers existing ON existing.device_id = j.device_id AND existing.gateway_id = j.gateway_id
+        WHERE j.action = 'revoke_peer' OR p.device_id IS NOT NULL`,
       [gatewayId, gatewayId],
     );
+    if (claimed.rowCount === 0) {
+      await client.query(
+        `UPDATE gateway_jobs SET status = 'failed', last_error_code = 'NO_GATEWAY_IP_CAPACITY',
+                lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+          WHERE gateway_id = $1 AND status = 'leased' AND lease_owner = $1
+            AND action = 'provision_peer' AND id IN (
+              SELECT id FROM gateway_jobs WHERE gateway_id = $1 AND status = 'leased'
+                AND lease_owner = $1 AND action = 'provision_peer' ORDER BY created_at LIMIT 1
+            ) AND NOT EXISTS (
+              SELECT 1 FROM gateway_peers p WHERE p.device_id = gateway_jobs.device_id
+                AND p.gateway_id = gateway_jobs.gateway_id AND p.status = 'provisioning'
+            )`,
+        [gatewayId],
+      );
+    }
     await client.query("COMMIT");
     if (!claimed.rowCount) return { job: null };
     return { job: claimed.rows[0] };
@@ -211,6 +257,21 @@ app.post("/v1/gateway-agent/jobs/:jobId/complete", async (request, reply) => {
         "UPDATE gateways SET active_peers = GREATEST(0, active_peers - 1), updated_at = now() WHERE id = $1",
         [gatewayId],
       );
+    }
+    if (success && job.rows[0].action === "provision_peer") {
+      const peer = await client.query(
+        "UPDATE gateway_peers SET status = 'active' WHERE device_id = $1 AND gateway_id = $2 AND status = 'provisioning' RETURNING id",
+        [job.rows[0].device_id, gatewayId],
+      );
+      if (!peer.rowCount) {
+        await client.query("ROLLBACK");
+        return reply.code(409).send({ error: "PROVISIONING_PEER_NOT_FOUND" });
+      }
+      await client.query("UPDATE devices SET status = 'active' WHERE id = $1", [job.rows[0].device_id]);
+      await client.query("UPDATE gateways SET active_peers = active_peers + 1, updated_at = now() WHERE id = $1", [gatewayId]);
+    }
+    if (!success && job.rows[0].action === "provision_peer") {
+      await client.query("UPDATE gateway_peers SET status = 'revoked', revoked_at = now() WHERE device_id = $1 AND gateway_id = $2 AND status = 'provisioning'", [job.rows[0].device_id, gatewayId]);
     }
     await client.query(
       `UPDATE gateway_jobs
