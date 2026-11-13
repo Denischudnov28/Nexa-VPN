@@ -123,18 +123,38 @@ paths:
         '201': { description: Device registered }
         '400': { description: Invalid request }
         '401': { description: Missing or invalid access token }
-  /v1/devices/{deviceId}/wireguard-profile:
+  /v1/devices/{deviceId}/provisioning-requests:
     post:
-      summary: Allocate a gateway peer and issue a device-specific profile
+      summary: Queue a gateway peer provisioning request
+      parameters:
+        - in: path
+          name: deviceId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                gatewayId: { type: string, format: uuid }
+      responses:
+        '202': { description: Provisioning job accepted; poll provisioning-status }
+        '403': { description: Subscription is not entitled or device is not owned by account }
+        '409': { description: No gateway capacity available or device already provisioned }
+  /v1/devices/{deviceId}/provisioning-status:
+    get:
+      summary: Read provisioning state and retrieve the active device profile
       parameters:
         - in: path
           name: deviceId
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '200': { description: Device-specific WireGuard profile; never cache or log response }
-        '403': { description: Subscription is not entitled or device is not owned by account }
-        '409': { description: No gateway capacity available }
+        '200': { description: Current job/peer state; profile is present only after gateway acknowledgement }
+        '403': { description: Subscription is not entitled }
+        '404': { description: Device not found }
   /v1/devices/{deviceId}:
     delete:
       summary: Revoke a device; gateway peer cleanup requires the gateway agent
