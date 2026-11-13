@@ -180,7 +180,7 @@ app.post("/v1/gateway-agent/jobs/claim", async (request, reply) => {
            FROM job JOIN gateways g ON g.id = job.gateway_id
            CROSS JOIN LATERAL generate_series(
              2,
-             LEAST(g.capacity_peers + 2,
+             LEAST(g.capacity_peers + 1,
                ((1::bigint << (32 - masklen(g.ipv4_cidr))) - 2)::integer)
            ) AS n(host_offset)
           WHERE job.action = 'provision_peer' AND g.ipv4_cidr IS NOT NULL
