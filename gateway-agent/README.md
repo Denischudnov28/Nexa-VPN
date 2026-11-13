@@ -43,7 +43,7 @@ The Linux gateway agent applies peer add/remove jobs from the NEXA control plane
 
 - `provision_peer`: installs the device public key with its assigned IPv4 /32 AllowedIPs.
 - `revoke_peer`: removes the public key from the local WireGuard interface; an already-absent peer is treated as successfully revoked.
-- The agent reports success only after the local `wg` command succeeds.
+- The agent reports success only after the local `wg` command succeeds and `wg-quick save` persists the peer change to the gateway config, so a reboot does not silently restore an old peer list.
 
 ## Important limitations
 
