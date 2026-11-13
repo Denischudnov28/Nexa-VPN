@@ -102,17 +102,32 @@ def run_wg(*args: str) -> str:
     return result.stdout
 
 
+def save_interface_config() -> None:
+    # Persist runtime peer changes so a gateway reboot cannot resurrect stale peers.
+    result = subprocess.run(
+        ["wg-quick", "save", WG_INTERFACE],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"wg-quick save failed (exit {result.returncode})")
+
+
 def apply_job(job: dict[str, Any]) -> None:
     action = job.get("action")
     public_key = validate_public_key(job.get("public_key"))
     if action == "provision_peer":
         address = str(ipaddress.IPv4Address(job.get("assigned_ipv4", "")))
         run_wg("set", WG_INTERFACE, "peer", public_key, "allowed-ips", address + "/32")
+        save_interface_config()
         log.info("Provisioned peer for device %s", job.get("device_id", "unknown"))
     elif action == "revoke_peer":
         peers = set(run_wg("show", WG_INTERFACE, "peers").split())
         if public_key in peers:
             run_wg("set", WG_INTERFACE, "peer", public_key, "remove")
+        save_interface_config()
         log.info("Revoked peer for device %s", job.get("device_id", "unknown"))
     else:
         raise ValueError("unsupported gateway job action")
