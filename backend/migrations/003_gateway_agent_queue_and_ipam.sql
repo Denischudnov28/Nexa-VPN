@@ -69,6 +69,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS gateway_jobs_one_open_action_idx
   ON gateway_jobs(device_id, gateway_id, action)
   WHERE status IN ('queued', 'leased');
 
+-- Released addresses must become reusable after the gateway agent confirms revocation.
+ALTER TABLE gateway_peers
+  DROP CONSTRAINT IF EXISTS gateway_peers_gateway_id_assigned_ipv4_key;
+CREATE UNIQUE INDEX IF NOT EXISTS gateway_peers_gateway_active_ipv4_uq
+  ON gateway_peers(gateway_id, assigned_ipv4)
+  WHERE status IN ('provisioning', 'active', 'revoking');
+
 CREATE INDEX IF NOT EXISTS gateway_peers_ipam_idx
   ON gateway_peers(gateway_id, assigned_ipv4)
   WHERE status IN ('provisioning', 'active', 'revoking');
