@@ -14,7 +14,7 @@ The Fastify service currently provides health status, public healthy-gateway cat
 
 Set `ACCESS_TOKEN_SECRET` to at least 32 random characters (use a cryptographically random secret, e.g. `openssl rand -base64 48`). Keep it in the hosting provider's secret manager, never in Git. `DATABASE_SSL=require` should be used for a production database connection.
 
-**Not yet production-ready:** email verification and account recovery, gateway peer provisioning and confirmed peer revocation, subscription enforcement during tunnel provisioning, payment provider adapters, admin roles/MFA, and gateway management are not implemented. Registration currently creates an active account; restrict access to a controlled beta until email verification and abuse controls are added. Device deletion marks associated gateway peers as `revoking`; it does not yet prove the peer has been removed from a live gateway. Do not treat this as an immediate kill switch until the private gateway agent acknowledges peer removal.
+**Not yet production-ready:** email verification and account recovery, payment provider adapters, admin roles/MFA, gateway onboarding/management, and end-to-end gateway-agent deployment tests remain incomplete. Subscription entitlement is checked by the provisioning API. The repository now includes a Linux gateway agent that applies provisioning and revocation jobs, but no live gateway has been provisioned or verified. Device deletion queues peer removal; it is not an immediate kill switch until the deployed gateway agent acknowledges the removal. Registration currently creates an active account; restrict access to a controlled beta until email verification and abuse controls are added.
 
 ## Required implementation order
 
