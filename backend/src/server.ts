@@ -163,6 +163,9 @@ app.post("/v1/gateway-agent/jobs/claim", async (request, reply) => {
           WHERE j.gateway_id = $1
             AND (j.status = 'queued' OR (j.status = 'leased' AND j.lease_expires_at < now()))
             AND j.available_at <= now()
+            AND (j.action = 'revoke_peer' OR EXISTS (
+              SELECT 1 FROM devices d WHERE d.id = j.device_id AND d.status <> 'revoked'
+            ))
           ORDER BY CASE j.action WHEN 'revoke_peer' THEN 0 ELSE 1 END, j.created_at
           FOR UPDATE SKIP LOCKED LIMIT 1
        ),
@@ -478,10 +481,19 @@ app.delete("/v1/devices/:deviceId", async (request, reply) => {
       await client.query("ROLLBACK");
       return reply.code(404).send({ error: "DEVICE_NOT_FOUND" });
     }
-    // Keep gateway peers in revoking state until the private gateway agent confirms removal.
+    // Cancel unclaimed provisioning work and revoke any peer already being installed or active.
+    await client.query(
+      `UPDATE gateway_jobs
+          SET status = 'failed', last_error_code = 'DEVICE_REVOKED',
+              completed_at = now(), lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+        WHERE device_id = $1 AND action = 'provision_peer' AND status = 'queued'`,
+      [params.data.deviceId],
+    );
+    // Keep peers in revoking state until the private gateway agent confirms removal.
+    // This includes a peer whose provisioning job was already leased by an agent.
     await client.query(
       `UPDATE gateway_peers SET status = 'revoking'
-        WHERE device_id = $1 AND status = 'active'`, [params.data.deviceId],
+        WHERE device_id = $1 AND status IN ('provisioning', 'active')`, [params.data.deviceId],
     );
     await client.query(
       `INSERT INTO gateway_jobs(device_id, gateway_id, action, status)
