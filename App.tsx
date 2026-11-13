@@ -120,7 +120,7 @@ export default function App() {
         "DNS = " + result.profile.dns.join(", "), "", "[Peer]",
         "PublicKey = " + result.profile.serverPublicKey, "Endpoint = " + result.profile.endpoint,
         "AllowedIPs = 0.0.0.0/0, ::/0", "PersistentKeepalive = 25",
-      ].join("\\n");
+      ].join("\n");
       setConfig(config);
       const permission = await nexaNativeVpn.prepare();
       if (!permission) {
